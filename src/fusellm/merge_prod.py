@@ -2,25 +2,36 @@
 """
 LLM Merge PROD — Production-ready model merging.
 
-Solution 1 (same arch, diff sizes): Deterministic CKA-based per-layer α (no search).
-Solution 2 (diff arch, diff sizes):   Gated bridge + 50-step fine-tune + repetition penalty.
+Same-architecture merge (CKA-guided per-layer alpha blending):
+    merge_same_arch(model_a, model_b, calib_texts, save_name)
 
-Both solutions save merged models to disk. Load with .from_pretrained().
+Cross-architecture bridge (zero-init linear projection + fine-tune):
+    build_bridge(ma, mb, tok, texts)
+    train_bridge_v2(ma, mb, tok, texts, steps)
+    merge_diff_arch(ma, mb, calib_texts, token_map, save_name)
+
+Generation:
+    generate_bridge(ma, mb, bridge, tok, prompt)
+    stitch_generate(ma, mb, bridge, tok, prompt)
 """
 
-import torch, gc, copy, math, warnings, os, json, numpy as np
+import torch, gc, copy, math, os, json, numpy as np
 import torch.nn as nn, torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
-from dataclasses import dataclass
-from typing import Optional, Dict, List
 
-warnings.filterwarnings("ignore")
-torch.set_grad_enabled(False)
+__all__ = [
+    "OptimalBridge", "CkaComputer", "cka_score",
+    "merge_same_arch", "build_bridge", "train_bridge_v2",
+    "merge_diff_arch", "generate_bridge", "stitch_generate",
+    "verify_generations", "load_merged",
+    "ppl", "clean", "proportional_map", "svd_project", "build_token_map",
+]
+
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.float16
 SAVE_DIR = "merged_models"
-os.makedirs(SAVE_DIR, exist_ok=True)
+
 
 # ─── HELPERS ───────────────────────────────────────────────────────────────
 
@@ -92,11 +103,6 @@ def cka_score(x, y):
 
 
 def merge_same_arch(model_a, model_b, calib_texts=None, save_name="merged_same_arch"):
-    """Deterministic merge for same-architecture, different-size models.
-    
-    No random search. Uses CKA similarity to set per-layer α values,
-    then does one deterministic refinement pass.
-    """
     tok = AutoTokenizer.from_pretrained(model_a.config._name_or_path if hasattr(model_a.config, '_name_or_path') else "gpt2")
     tok.pad_token = tok.eos_token
     if calib_texts is None: calib_texts = load_texts(32)
@@ -106,8 +112,7 @@ def merge_same_arch(model_a, model_b, calib_texts=None, save_name="merged_same_a
 
     n = model_a.config.n_layer
     mapping = proportional_map(n, model_b.config.n_layer)
-    
-    # Phase 1: Compute CKA per layer
+
     print("  Computing CKA...")
     cka_a = CkaComputer(model_a, n)
     cka_b = CkaComputer(model_b, model_b.config.n_layer)
@@ -121,26 +126,19 @@ def merge_same_arch(model_a, model_b, calib_texts=None, save_name="merged_same_a
     avg_cka = np.mean(list(cka_vals.values()))
     print(f"  Avg CKA: {avg_cka:.3f}")
 
-    # Phase 2: Deterministic α from CKA
-    # High CKA (models agree) → blend more aggressively (α near 0.5)
-    # Low CKA (models disagree) → trust A more (α near 0.8)
     alphas = {}
     for i in range(n):
         c = cka_vals.get(i, 0.5)
         alphas[i] = max(0.3, min(0.9, 0.8 - 0.4 * c))
 
-    # Phase 3: Pre-project B weights
     b_proj = _project_b_weights(model_a, model_b, mapping)
-
-    # Phase 4: Apply merge
     merged_sd = _apply_merge(model_a, model_b, mapping, alphas, b_proj)
 
-    # Phase 5: One deterministic refinement pass (3 candidates per layer)
     m = AutoModelForCausalLM.from_config(model_a.config).to(DEVICE)
     m.load_state_dict(merged_sd, strict=False)
     best_ppl = ppl(m, ids, mask)
     best_alphas = dict(alphas)
-    
+
     print(f"  CKA-init PPL: {best_ppl:.1f} | Refining...")
     for phase, steps in [("coarse", [0.25, -0.25]), ("fine", [0.1, -0.1])]:
         for layer in range(n):
@@ -156,22 +154,22 @@ def merge_same_arch(model_a, model_b, calib_texts=None, save_name="merged_same_a
                     best_p = p; best_a = cand
             if best_a != orig: best_alphas[layer] = best_a; best_ppl = best_p
 
-    # Phase 6: Build final merged model
     merged_sd = _apply_merge(model_a, model_b, mapping, best_alphas, b_proj)
     merged = AutoModelForCausalLM.from_config(model_a.config).to(DEVICE)
     merged.load_state_dict(merged_sd, strict=False)
     final_ppl = ppl(merged, ids, mask)
 
-    # Save (skip if save_name is None)
     if save_name is not None:
-        merged.save_pretrained(os.path.join(SAVE_DIR, save_name))
-        tok.save_pretrained(os.path.join(SAVE_DIR, save_name))
-        with open(os.path.join(SAVE_DIR, save_name, "merge_info.json"), "w") as f:
+        save_dir = os.path.join(SAVE_DIR, save_name)
+        os.makedirs(save_dir, exist_ok=True)
+        merged.save_pretrained(save_dir)
+        tok.save_pretrained(save_dir)
+        with open(os.path.join(save_dir, "merge_info.json"), "w") as f:
             json.dump({"alphas": {str(k): round(v, 3) for k, v in best_alphas.items()},
                         "final_ppl": round(final_ppl, 1),
                         "avg_cka": round(avg_cka, 3),
                         "type": "same_arch_different_size"}, f, indent=2)
-        print(f"  [OK] Saved to {SAVE_DIR}/{save_name}/")
+        print(f"  [OK] Saved to {save_dir}/")
 
     print(f"  [OK] Final PPL: {final_ppl:.1f}")
     return merged
@@ -219,7 +217,7 @@ def _apply_merge(model_a, model_b, mapping, alphas, b_proj):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# SOLUTION 2 — LS bridge (diff arch, zero training)
+# SOLUTION 2 — Zero-init bridge (diff arch)
 # ═══════════════════════════════════════════════════════════════════════════
 
 class OptimalBridge(nn.Module):
@@ -232,15 +230,8 @@ class OptimalBridge(nn.Module):
 
 
 def build_bridge(ma, mb, tok, texts, token_map=None):
-    """Zero-init bridge. 
-    
-    W is initialized to zero so bridge starts as identity on A (h_merged = h_A).
-    LS init (predicting h_A from h_B) is incorrect here because the bridge formula
-    is h_A + W@h_B, so W@h_B ≈ h_A would double the hidden states.
-    """
     d_a, d_b = ma.config.n_embd, mb.config.hidden_size
     bridge = OptimalBridge(d_a, d_b)
-    nn.init.zeros_(bridge.proj.weight)
     return bridge.to(DEVICE)
 
 
@@ -259,37 +250,31 @@ def _stitch_forward(ma, mb, bridge, ids, mask, labels, dtype, token_map=None):
 
 
 def train_bridge_v2(ma, mb, tok, texts, token_map=None, steps=10, lr=3e-4):
-    """Zero-init + fine-tune bridge.
-    
-    W is initialized to zero so the bridge starts as identity on A (h_merged = h_A).
-    This is critical: LS init that predicts h_A from h_B doubles the hidden states
-    and produces garbage (norm ~24000). Zero init ensures stable training.
-    """
     d_a, d_b = ma.config.n_embd, mb.config.hidden_size
     bridge = OptimalBridge(d_a, d_b)
-    nn.init.zeros_(bridge.proj.weight)
     bridge.to(DEVICE)
-    
+
     enc = tok(texts, truncation=True, padding=True, max_length=64, return_tensors="pt")
     ids, mask = enc.input_ids.to(DEVICE), enc.attention_mask.to(DEVICE)
-    
+
     opt = torch.optim.AdamW(bridge.parameters(), lr=lr, weight_decay=0.01)
     best = None; best_loss = float("inf")
     model_dtype = next(ma.parameters()).dtype
-    stitched = lambda ids_b, labels: _stitch_forward(ma, mb, bridge, ids_b, mask, labels, model_dtype, token_map)
-    
+
     torch.set_grad_enabled(True)
+    bridge.train()
     for s in range(steps):
         opt.zero_grad()
-        loss, _ = stitched(ids, ids)
+        loss, _ = _stitch_forward(ma, mb, bridge, ids, mask, ids, model_dtype, token_map)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(bridge.parameters(), 1.0)
         opt.step()
         if loss.item() < best_loss:
             best_loss = loss.item(); best = copy.deepcopy(bridge.state_dict())
         if (s+1) % 5 == 0: print(f"    Step {s+1}/{steps} loss={loss.item():.4f}")
-    
+
     bridge.load_state_dict(best if best else bridge.state_dict())
+    bridge.eval()
     torch.set_grad_enabled(False)
     return bridge
 
@@ -313,7 +298,6 @@ def stitch_generate(ma, mb, bridge, tok, prompt, max_new=30, token_map=None):
 @torch.no_grad()
 def generate_bridge(model_a, model_b, bridge, tok, prompt, max_new=50,
                     token_map=None, mix_alpha=0.3, temp=0.9):
-    """Generate with bridge. mix_alpha=0.3 keeps output close to A's distribution."""
     model_a.eval(); model_b.eval(); bridge.eval()
     ids = tok(prompt, return_tensors="pt").input_ids.to(DEVICE)
 
@@ -324,7 +308,6 @@ def generate_bridge(model_a, model_b, bridge, tok, prompt, max_new=50,
         ob = model_b(ids_mapped, output_hidden_states=True)
         ha, hb = oa.hidden_states[-1].float(), ob.hidden_states[-1].float()
         k = min(ha.shape[1], hb.shape[1])
-        # Blend: 30% bridge, 70% pure A → keeps LM head in its trained distribution
         h_bridge = bridge(ha[:, :k], hb[:, :k])
         hf = ha[:, :k] + mix_alpha * (h_bridge - ha[:, :k])
         logits = model_a.lm_head(hf.to(dtype=next(model_a.parameters()).dtype))[:, -1, :] / temp
@@ -336,7 +319,6 @@ def generate_bridge(model_a, model_b, bridge, tok, prompt, max_new=50,
 
 def merge_diff_arch(model_a, model_b, calib_texts=None, token_map=None,
                     save_name="merged_diff_arch", tok=None):
-    """Merge diff architectures via LS bridge (no training, instant)."""
     if tok is None:
         tok = AutoTokenizer.from_pretrained(
             model_a.config._name_or_path if hasattr(model_a.config, '_name_or_path') else "distilgpt2"
@@ -345,7 +327,6 @@ def merge_diff_arch(model_a, model_b, calib_texts=None, token_map=None,
 
     if calib_texts is None: calib_texts = load_texts(48)
 
-    # Baseline
     enc = tok(calib_texts[:16], truncation=True, padding=True, max_length=64, return_tensors="pt")
     ids, mask = enc.input_ids.to(DEVICE), enc.attention_mask.to(DEVICE)
     pp_a = ppl(model_a, ids, mask)
@@ -354,7 +335,6 @@ def merge_diff_arch(model_a, model_b, calib_texts=None, token_map=None,
     print("  Computing LS bridge (zero training)...")
     bridge = build_bridge(model_a, model_b, tok, calib_texts[:48], token_map)
 
-    # Eval bridge
     with torch.no_grad():
         ids_mapped = torch.tensor([[token_map.get(i.item(), 0) for i in row] for row in ids],
                                    device=DEVICE) if token_map else ids
@@ -369,7 +349,6 @@ def merge_diff_arch(model_a, model_b, calib_texts=None, token_map=None,
         b_ppl = math.exp(loss.item())
     print(f"  Bridge PPL: {b_ppl:.1f} {'<-- BETTER' if b_ppl < pp_a else ''}")
 
-    # Save
     bridge_dir = os.path.join(SAVE_DIR, save_name)
     os.makedirs(bridge_dir, exist_ok=True)
     torch.save(bridge.state_dict(), os.path.join(bridge_dir, "bridge.pt"))
@@ -388,6 +367,42 @@ def merge_diff_arch(model_a, model_b, calib_texts=None, token_map=None,
     print(f"  [OK] Saved to {bridge_dir}/")
 
     return bridge
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# LOADING
+# ═══════════════════════════════════════════════════════════════════════════
+
+def load_merged(save_name):
+    """Load a previously saved merged model or bridge.
+
+    For same-arch merges: returns (model, tokenizer, config_dict)
+    For diff-arch bridges: returns (bridge, tokenizer, config_dict)
+    """
+    save_dir = os.path.join(SAVE_DIR, save_name)
+    if not os.path.exists(save_dir):
+        raise FileNotFoundError(f"Saved model not found at {save_dir}")
+
+    if os.path.exists(os.path.join(save_dir, "merge_info.json")):
+        # Same-arch merge
+        with open(os.path.join(save_dir, "merge_info.json")) as f:
+            info = json.load(f)
+        model = AutoModelForCausalLM.from_pretrained(save_dir, torch_dtype=DTYPE).to(DEVICE).eval()
+        tok = AutoTokenizer.from_pretrained(save_dir)
+        return model, tok, info
+
+    if os.path.exists(os.path.join(save_dir, "bridge_config.json")):
+        # Diff-arch bridge
+        with open(os.path.join(save_dir, "bridge_config.json")) as f:
+            info = json.load(f)
+        bridge = OptimalBridge(info["d_a"], info["d_b"])  # zero init
+        state = torch.load(os.path.join(save_dir, "bridge.pt"), map_location=DEVICE, weights_only=True)
+        bridge.load_state_dict(state)
+        bridge.to(DEVICE).eval()
+        tok = AutoTokenizer.from_pretrained(save_dir)
+        return bridge, tok, info
+
+    raise ValueError(f"Unknown format in {save_dir}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -428,12 +443,11 @@ def verify_generations(model_or_bridge, model_a, model_b, tok, token_map=None, t
 # ═══════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    import sys, copy
+    import sys
 
     print(f"Device: {DEVICE}  |  Running on {torch.cuda.get_device_name(0) if DEVICE == 'cuda' else 'CPU'}")
     run_sol = sys.argv[1] if len(sys.argv) > 1 else "3"
 
-    # ─── SOLUTION 1: Same arch, diff sizes ───
     if run_sol in ("1", "3"):
         print("\n" + "="*65)
         print("  SOLUTION 1: Same architecture, different sizes")
@@ -447,16 +461,13 @@ if __name__ == "__main__":
         merged = merge_same_arch(ma, mb, save_name="gpt2_distilgpt2_merged")
         verify_generations(merged, None, None, tok, tag="(Sol 1: GPT-2 + DistilGPT-2)")
 
-        # Cleanup
         del ma, mb, merged; clean()
 
-    # ─── SOLUTION 2: Diff arch ───
     if run_sol in ("2", "3"):
         print("\n" + "="*65)
         print("  SOLUTION 2: Different architectures (LS bridge, zero training)")
         print("="*65)
 
-        # Test A: Same tokenizer (GPT-2 + OPT)
         print("\n  ── Test A: DistilGPT-2 + OPT-125M (same tokenizer) ──")
         ma = AutoModelForCausalLM.from_pretrained("distilgpt2", torch_dtype=DTYPE).to(DEVICE).eval()
         mb = AutoModelForCausalLM.from_pretrained("facebook/opt-125m", torch_dtype=DTYPE, use_safetensors=True).to(DEVICE).eval()
@@ -466,7 +477,6 @@ if __name__ == "__main__":
         verify_generations(bridge_a, ma, mb, tok, tag="(Sol 2a: GPT-2 + OPT)")
         del bridge_a; clean()
 
-        # Test B: Cross-tokenizer (GPT-2 + SmolLM2 with token map)
         print("\n  ── Test B: DistilGPT-2 + SmolLM2-135M (cross-tokenizer) ──")
         mb2 = AutoModelForCausalLM.from_pretrained("HuggingFaceTB/SmolLM2-135M", torch_dtype=DTYPE).to(DEVICE).eval()
         tok2 = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM2-135M")

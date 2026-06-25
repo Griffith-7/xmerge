@@ -1,9 +1,17 @@
 """Shared utilities for all merge approaches."""
+
 import torch, gc, math, numpy as np
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+__all__ = [
+    "svd_project", "proportional_map", "hidden_dim", "num_layers",
+    "compute_ppl", "generate_text", "load_calibration", "build_token_map",
+    "clean",
+]
+
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.float16
+
 
 def clean():
     gc.collect()
