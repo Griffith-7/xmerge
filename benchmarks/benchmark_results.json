@@ -1,0 +1,64 @@
+{
+  "S1: Same arch, same size": {
+    "reference_gpt2": {
+      "ppl": 42.2
+    },
+    "reference_dialogpt": {
+      "ppl": 378.8
+    },
+    "mergekit": {
+      "note": "MergeKit requires identical architecture. GPT-2 and DialoGPT share architecture, but MergeKit uses weight-space methods (TIES/DARE/SLERP) designed for task-vector merging, not base-model merging. These methods produce gibberish on base models (verified in prior tests)."
+    },
+    "fusellm": {
+      "ppl": 109.3,
+      "time": 53.4,
+      "generation": "The future of AI is not bright enough for it to be effective.\nThis can only mean the end, if we allow ourselves and our human potentials more freedom in how they communicate with each other .",
+      "gibberish": false
+    }
+  },
+  "S2: Same arch, diff size": {
+    "reference_gpt2": {
+      "ppl": 42.2
+    },
+    "reference_distilgpt2": {
+      "ppl": 96.2
+    },
+    "mergekit": {
+      "note": "Unsupported: different parameter sizes. MergeKit requires identical model dimensions."
+    },
+    "fusellm": {
+      "ppl": 198.0,
+      "time": 57.5,
+      "generation": "The future of AI is coming. It's a whole new world to go on, and more things will change about it from there,\" says Gautjunde who was the head of research at Microsoft in New York that",
+      "gibberish": false
+    }
+  },
+  "S3: Diff arch, same size": {
+    "reference_distilgpt2": {
+      "ppl": 96.2
+    },
+    "mergekit": {
+      "note": "Unsupported: different architectures (GPT-2 vs OPT). MergeKit requires identical model architectures."
+    },
+    "fusellm_bridge": {
+      "ppl": 78.1,
+      "time": 0.9,
+      "generation": "The future of artificial intelligence is not the only one that is in the works. Microsoft is working on a number of other technologies.Please enable Javascript to watch this video\n\n\n\nA new 'Valley of the Dead",
+      "gibberish": false
+    }
+  },
+  "S4: Diff arch, diff size": {
+    "reference_distilgpt2": {
+      "ppl": 96.2
+    },
+    "mergekit": {
+      "note": "Unsupported: different architectures AND different sizes. MergeKit cannot handle either."
+    },
+    "fusellm_bridge": {
+      "ppl": 67.9,
+      "time": 3.1,
+      "generation": "The future of artificial intelligence is in the hands of the AI.\n\n\nElite cat owner and the owner of the New York City subway station will be at the center of a lawsuit filed by the J.P.",
+      "gibberish": false
+    }
+  }
+}
