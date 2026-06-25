@@ -22,6 +22,7 @@ import torch, gc, copy, math, os, json, numpy as np
 import torch.nn as nn, torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
+from . import utils
 
 __all__ = [
     "OptimalBridge", "CkaComputer", "activation_similarity",
@@ -270,7 +271,7 @@ class OptimalBridge(nn.Module):
 
 
 def build_bridge(ma, mb, tok, texts, token_map=None):
-    d_a, d_b = ma.config.n_embd, mb.config.hidden_size
+    d_a, d_b = utils.hidden_dim(ma.config), utils.hidden_dim(mb.config)
     bridge = OptimalBridge(d_a, d_b)
     return bridge.to(DEVICE)
 
@@ -290,7 +291,7 @@ def _stitch_forward(ma, mb, bridge, ids, mask, labels, dtype, token_map=None):
 
 
 def train_bridge_v2(ma, mb, tok, texts, token_map=None, steps=10, lr=3e-4, weight_decay=0.01, max_len=128):
-    d_a, d_b = ma.config.n_embd, mb.config.hidden_size
+    d_a, d_b = utils.hidden_dim(ma.config), utils.hidden_dim(mb.config)
     bridge = OptimalBridge(d_a, d_b)
     bridge.to(DEVICE)
 
@@ -345,7 +346,7 @@ def merge_same_arch_bridge(model_a, model_b, tok, calib_texts, steps=10, lr=3e-4
         tok.save_pretrained(save_dir)
         json.dump({
             "type": "same_arch_bridge",
-            "d_a": model_a.config.n_embd, "d_b": model_b.config.hidden_size,
+            "d_a": utils.hidden_dim(model_a.config), "d_b": utils.hidden_dim(model_b.config),
             "n_layers_a": n_a, "n_layers_b": n_b,
             "final_ppl": round(ppl_val, 1),
         }, open(os.path.join(save_dir, "bridge_config.json"), "w"), indent=2)
@@ -432,7 +433,7 @@ def merge_diff_arch(model_a, model_b, calib_texts=None, token_map=None,
     os.makedirs(bridge_dir, exist_ok=True)
     torch.save(bridge.state_dict(), os.path.join(bridge_dir, "bridge.pt"))
     config = {
-        "d_a": model_a.config.n_embd, "d_b": model_b.config.hidden_size,
+        "d_a": utils.hidden_dim(model_a.config), "d_b": utils.hidden_dim(model_b.config),
         "model_a": model_a.config._name_or_path if hasattr(model_a.config, '_name_or_path') else "distilgpt2",
         "model_b": model_b.config._name_or_path if hasattr(model_b.config, '_name_or_path') else "unknown",
         "ppl_a": round(pp_a, 1), "ppl_bridge": round(b_ppl, 1),
