@@ -233,29 +233,17 @@ def build_token_map(tok_a, tok_b):
         id_map[i] = bid[0] if bid else 0
     return id_map
 
-def ls_init_bridge(ma, mb, tok, texts, token_map=None):
-    """Initialize bridge via least-squares (closed form, no gradients)"""
+def train_bridge_v2(ma, mb, tok, texts, token_map=None, steps=10, lr=3e-4):
+    """Zero-init + fine-tune bridge.
+    
+    W is initialized to zero so the bridge starts as identity on A (h_merged = h_A).
+    This is critical: LS init that predicts h_A from h_B doubles the hidden states
+    and produces garbage (norm ~24000). Zero init ensures stable training.
+    """
     d_a, d_b = ma.config.n_embd, mb.config.hidden_size
     bridge = OptimalBridge(d_a, d_b)
-    
-    enc = tok(texts, truncation=True, padding=True, max_length=64, return_tensors="pt")
-    ids, mask = enc.input_ids.to(DEVICE), enc.attention_mask.to(DEVICE)
-    ids_b = torch.tensor([[token_map.get(i.item(), 0) for i in row] for row in ids],
-                          device=DEVICE) if token_map else ids
-    
-    ha = ma(ids, attention_mask=mask, output_hidden_states=True).hidden_states[-1].float()
-    hb = mb(ids_b, attention_mask=mask, output_hidden_states=True).hidden_states[-1].float()
-    k = min(ha.shape[1], hb.shape[1])
-    Ha, Hb = ha[:, :k].reshape(-1, d_a), hb[:, :k].reshape(-1, d_b)
-    
-    W = (Ha.T @ Hb) @ torch.linalg.inv(Hb.T @ Hb + 1e-6 * torch.eye(d_b, device=DEVICE))
-    bridge.proj.weight.data = W.to(dtype=torch.float32)
-    return bridge.to(DEVICE)
-
-def train_bridge_v2(ma, mb, tok, texts, token_map=None, steps=10, lr=3e-4):
-    """LS init + fine-tune bridge"""
-    print("  Computing least-squares bridge init...")
-    bridge = ls_init_bridge(ma, mb, tok, texts, token_map)
+    nn.init.zeros_(bridge.proj.weight)
+    bridge.to(DEVICE)
     
     enc = tok(texts, truncation=True, padding=True, max_length=64, return_tensors="pt")
     ids, mask = enc.input_ids.to(DEVICE), enc.attention_mask.to(DEVICE)

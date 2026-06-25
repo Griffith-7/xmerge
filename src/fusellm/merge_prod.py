@@ -162,17 +162,18 @@ def merge_same_arch(model_a, model_b, calib_texts=None, save_name="merged_same_a
     merged.load_state_dict(merged_sd, strict=False)
     final_ppl = ppl(merged, ids, mask)
 
-    # Save
-    merged.save_pretrained(os.path.join(SAVE_DIR, save_name))
-    tok.save_pretrained(os.path.join(SAVE_DIR, save_name))
-    with open(os.path.join(SAVE_DIR, save_name, "merge_info.json"), "w") as f:
-        json.dump({"alphas": {str(k): round(v, 3) for k, v in best_alphas.items()},
-                    "final_ppl": round(final_ppl, 1),
-                    "avg_cka": round(avg_cka, 3),
-                    "type": "same_arch_different_size"}, f, indent=2)
+    # Save (skip if save_name is None)
+    if save_name is not None:
+        merged.save_pretrained(os.path.join(SAVE_DIR, save_name))
+        tok.save_pretrained(os.path.join(SAVE_DIR, save_name))
+        with open(os.path.join(SAVE_DIR, save_name, "merge_info.json"), "w") as f:
+            json.dump({"alphas": {str(k): round(v, 3) for k, v in best_alphas.items()},
+                        "final_ppl": round(final_ppl, 1),
+                        "avg_cka": round(avg_cka, 3),
+                        "type": "same_arch_different_size"}, f, indent=2)
+        print(f"  [OK] Saved to {SAVE_DIR}/{save_name}/")
 
     print(f"  [OK] Final PPL: {final_ppl:.1f}")
-    print(f"  [OK] Saved to {SAVE_DIR}/{save_name}/")
     return merged
 
 
@@ -230,19 +231,15 @@ class OptimalBridge(nn.Module):
 
 
 def build_bridge(ma, mb, tok, texts, token_map=None):
-    """Least-squares bridge init (closed form, zero gradients, zero training)."""
+    """Zero-init bridge. 
+    
+    W is initialized to zero so bridge starts as identity on A (h_merged = h_A).
+    LS init (predicting h_A from h_B) is incorrect here because the bridge formula
+    is h_A + W@h_B, so W@h_B ≈ h_A would double the hidden states.
+    """
     d_a, d_b = ma.config.n_embd, mb.config.hidden_size
     bridge = OptimalBridge(d_a, d_b)
-    enc = tok(texts, truncation=True, padding=True, max_length=64, return_tensors="pt")
-    ids, mask = enc.input_ids.to(DEVICE), enc.attention_mask.to(DEVICE)
-    ids_b = torch.tensor([[token_map.get(i.item(), 0) for i in row] for row in ids],
-                          device=DEVICE) if token_map else ids
-    ha = ma(ids, attention_mask=mask, output_hidden_states=True).hidden_states[-1].float()
-    hb = mb(ids_b, attention_mask=mask, output_hidden_states=True).hidden_states[-1].float()
-    k = min(ha.shape[1], hb.shape[1])
-    Ha, Hb = ha[:, :k].reshape(-1, d_a), hb[:, :k].reshape(-1, d_b)
-    W = (Ha.T @ Hb) @ torch.linalg.inv(Hb.T @ Hb + 1e-6 * torch.eye(d_b, device=DEVICE))
-    bridge.proj.weight.data = W.to(dtype=torch.float32)
+    nn.init.zeros_(bridge.proj.weight)
     return bridge.to(DEVICE)
 
 

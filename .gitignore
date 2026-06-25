@@ -10,3 +10,4 @@ merged_models/
 benchmarks/__pycache__/
 .vscode/
 .idea/
+benchmarks/fusellm_results.json

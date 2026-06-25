@@ -172,22 +172,26 @@ def merge_same_arch(ma, mb, ids, mask, tok, eval_texts):
     best_sd = _build_sd(best_alphas)
     best_ppl = _eval(best_sd)
 
-    # spectral repair with guard
-    for k in list(best_sd.keys()):
-        if k.startswith("transformer.h.") and best_sd[k].dim() == 2:
+    # spectral repair with guard (revert if PPL increases)
+    repaired_sd = {k: v.clone() for k, v in best_sd.items()}
+    for k in list(repaired_sd.keys()):
+        if k.startswith("transformer.h.") and repaired_sd[k].dim() == 2:
             parts = k.split("."); i_a = int(parts[2]); local = ".".join(parts[3:])
             key = (i_a, local)
-            if key in bp and best_sd[k].shape == sd_a[k].shape:
+            if key in bp and repaired_sd[k].shape == sd_a[k].shape:
                 a = best_alphas.get(i_a, 0.5)
                 try:
-                    U, S, Vt = torch.linalg.svd(best_sd[k].float(), full_matrices=False)
+                    U, S, Vt = torch.linalg.svd(repaired_sd[k].float(), full_matrices=False)
                     _, Sa, _ = torch.linalg.svd(sd_a[k].float(), full_matrices=False)
                     _, Sb, _ = torch.linalg.svd(bp[key].float(), full_matrices=False)
                     kk = min(len(S), len(Sa), len(Sb))
                     S_new = S.clone(); S_new[:kk] = a * Sa[:kk] + (1-a) * Sb[:kk]
-                    best_sd[k] = U @ torch.diag(S_new) @ Vt
+                    repaired_sd[k] = U @ torch.diag(S_new) @ Vt
                 except: pass
-    best_ppl = _eval(best_sd)
+    repaired_ppl = _eval(repaired_sd)
+    if repaired_ppl < best_ppl:
+        best_sd = repaired_sd
+        best_ppl = repaired_ppl
     return best_sd, best_ppl
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -336,6 +340,10 @@ for scenario in range(1, 5):
         s = {}
         s["reference_distilgpt2"] = {"ppl": round(compute_ppl(ma, tok, EVAL_TEXTS), 1)}
         print(f"  DistilGPT-2 PPL: {s['reference_distilgpt2']['ppl']}")
+        # Also evaluate parent B (OPT-125M) with its own tokenizer
+        tok_opt = AutoTokenizer.from_pretrained("facebook/opt-125m"); tok_opt.pad_token = tok_opt.eos_token
+        s["reference_opt125m"] = {"ppl": round(compute_ppl(mb, tok_opt, EVAL_TEXTS), 1)}
+        print(f"  OPT-125M PPL: {s['reference_opt125m']['ppl']}")
         s["mergekit"] = {"note": "Unsupported: different architectures (GPT-2 vs OPT). MergeKit requires identical model architectures."}
         print("  fusellm bridge + 10-step training...")
         t0 = time.time()
@@ -354,11 +362,14 @@ for scenario in range(1, 5):
         mb = AutoModelForCausalLM.from_pretrained("HuggingFaceTB/SmolLM2-135M", torch_dtype=DTYPE).to(DEVICE).eval()
         tok_a = AutoTokenizer.from_pretrained("distilgpt2"); tok_a.pad_token = tok_a.eos_token
         tok_b = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM2-135M"); tok_b.pad_token = tok_b.eos_token
-        tm = build_token_map(tok_a, tok_b)
-        print(f"  Token map: {len(tm)} entries, match: {sum(1 for v in tm.values() if v > 0) / len(tm) * 100:.0f}%")
+        # Evaluate parent B (SmolLM2) with its own tokenizer
         s = {}
         s["reference_distilgpt2"] = {"ppl": round(compute_ppl(ma, tok_a, EVAL_TEXTS), 1)}
         print(f"  DistilGPT-2 PPL: {s['reference_distilgpt2']['ppl']}")
+        s["reference_smollm2"] = {"ppl": round(compute_ppl(mb, tok_b, EVAL_TEXTS), 1)}
+        print(f"  SmolLM2-135M PPL: {s['reference_smollm2']['ppl']}")
+        tm = build_token_map(tok_a, tok_b)
+        print(f"  Token map: {len(tm)} entries, match: {sum(1 for v in tm.values() if v > 0) / len(tm) * 100:.0f}%")
         s["mergekit"] = {"note": "Unsupported: different architectures AND different sizes. MergeKit cannot handle either."}
         print("  fusellm cross-arch cross-tokenizer bridge...")
         t0 = time.time()
