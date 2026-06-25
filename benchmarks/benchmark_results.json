@@ -1,69 +1,69 @@
 {
   "S1: Same arch, same size": {
     "reference_gpt2": {
-      "ppl": 42.2
+      "ppl": 81.9
     },
     "reference_dialogpt": {
-      "ppl": 378.8
+      "ppl": 5008.2
     },
     "mergekit": {
-      "note": "MergeKit requires identical architecture. GPT-2 and DialoGPT share architecture, but MergeKit uses weight-space methods (TIES/DARE/SLERP) designed for task-vector merging, not base-model merging. These methods produce gibberish on base models (verified in prior tests)."
+      "note": "MergeKit requires identical architecture. GPT-2 and DialoGPT share architecture, but MergeKit uses weight-space methods (TIES/DARE/SLERP) designed for task-vector merging, not base-model merging."
     },
     "fusellm": {
-      "ppl": 102.9,
-      "time": 53.5,
-      "generation": "The future of AI is already there. The future in which human-controlled robots are commonplace and regulated is approaching civilization's present form, characterized by technological unemployment that threatens to overwhelm even the largest enterprises with their services and software infrastructure",
+      "ppl": 676.3,
+      "time": 37.2,
+      "generation": "The future of artificial intelligence is debated endlessly worldwide, Artificial Intelligence tends to rise globally Economic development declines rapidly Acrossarching societal trends Cognitive biases tendency Developmental disturbances Increasing technological developments Genetic adaptations Evolution Patterns evolving behavioral patterns Emerging ecological shifts Population Trends Climate",
       "gibberish": false
     }
   },
   "S2: Same arch, diff size": {
     "reference_gpt2": {
-      "ppl": 42.2
+      "ppl": 81.9
     },
     "reference_distilgpt2": {
-      "ppl": 96.2
+      "ppl": 119.4
     },
     "mergekit": {
       "note": "Unsupported: different parameter sizes. MergeKit requires identical model dimensions."
     },
     "fusellm": {
-      "ppl": 104.2,
-      "time": 91.9,
-      "generation": "The future of AI is clear. We are now in the beginning stages of this process which will enable us to develop new technologies and techniques for applications that solve many different problems, challenges and issues worldwide.\"\n\"We have been",
+      "ppl": 1487.4,
+      "time": 37.0,
+      "generation": "The future of artificial intelligence is in a globalised version, or an unise it.\n ( human invention or form the same as computer was invented he's ( person). l\"..\" he. man,\" who came from somewhere",
       "gibberish": false
     }
   },
   "S3: Diff arch, same size": {
     "reference_distilgpt2": {
-      "ppl": 96.2
+      "ppl": 119.4
     },
     "reference_opt125m": {
-      "ppl": 52.0
+      "ppl": 83.0
     },
     "mergekit": {
       "note": "Unsupported: different architectures (GPT-2 vs OPT). MergeKit requires identical model architectures."
     },
     "fusellm_bridge": {
-      "ppl": 78.1,
-      "time": 1.0,
-      "generation": "The future of artificial intelligence is not to be blamed.The New York Times has been reporting that the only problem is the tendency to find the media to avoid them.\n\n\n\nThe American Civil Liberties Union says the U",
+      "ppl": 97.7,
+      "time": 57.4,
+      "generation": "The future of artificial intelligence is a unique area in the sciences and humanities to be explored in the fields of technology and information sciences, including health and technology engineering and health sciences. It",
       "gibberish": false
     }
   },
   "S4: Diff arch, diff size": {
     "reference_distilgpt2": {
-      "ppl": 96.2
+      "ppl": 119.4
     },
     "reference_smollm2": {
-      "ppl": 15.4
+      "ppl": 54.3
     },
     "mergekit": {
       "note": "Unsupported: different architectures AND different sizes. MergeKit cannot handle either."
     },
     "fusellm_bridge": {
-      "ppl": 67.9,
-      "time": 2.9,
-      "generation": "The future of artificial intelligence is a mixed reality.A new study is being conducted to make the world\u2019s largest computer and mobile device\u2026\n\n\nThe information comes from a study by the University of Minnesota's research",
+      "ppl": 104.6,
+      "time": 78.0,
+      "generation": "The future of artificial intelligence is in a gradual process and is as of today as ever before seen in the field of machine vision and artificial intelligence . In the United States , our nation",
       "gibberish": false
     }
   }

@@ -15,7 +15,15 @@ dependencies = [
     "numpy>=1.22.0",
     "datasets>=2.0.0",
 ]
+[project.optional-dependencies]
+dev = ["pytest>=7.0.0"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
 packages = ["fusellm"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: marks tests as slow (GPU heavy, skip with -m 'not slow')",
+]

@@ -8,7 +8,7 @@ Solution 2 (diff arch, diff sizes):   Gated bridge + 50-step fine-tune + repetit
 Both solutions save merged models to disk. Load with .from_pretrained().
 """
 
-import torch, gc, math, warnings, os, json, numpy as np
+import torch, gc, copy, math, warnings, os, json, numpy as np
 import torch.nn as nn, torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
@@ -226,6 +226,7 @@ class OptimalBridge(nn.Module):
     def __init__(self, d_a, d_b):
         super().__init__()
         self.proj = nn.Linear(d_b, d_a, bias=False)
+        nn.init.zeros_(self.proj.weight)
     def forward(self, h_a, h_b):
         return h_a + self.proj(h_b)
 
@@ -241,6 +242,72 @@ def build_bridge(ma, mb, tok, texts, token_map=None):
     bridge = OptimalBridge(d_a, d_b)
     nn.init.zeros_(bridge.proj.weight)
     return bridge.to(DEVICE)
+
+
+def _stitch_forward(ma, mb, bridge, ids, mask, labels, dtype, token_map=None):
+    with torch.no_grad():
+        ids_b = torch.tensor([[token_map.get(i.item(), 0) for i in row] for row in ids],
+                              device=DEVICE) if token_map else ids
+        oa, ob = ma(ids, attention_mask=mask, output_hidden_states=True), mb(ids_b, attention_mask=mask, output_hidden_states=True)
+        ha, hb = oa.hidden_states[-1].float(), ob.hidden_states[-1].float()
+        k = min(ha.shape[1], hb.shape[1])
+    hf = bridge(ha[:, :k], hb[:, :k])
+    logits = ma.lm_head(hf.to(dtype))
+    sl, ll = logits[..., :-1, :].contiguous(), labels[:, :k][..., 1:].contiguous()
+    loss = F.cross_entropy(sl.view(-1, sl.size(-1)), ll.view(-1), ignore_index=-100)
+    return loss, logits
+
+
+def train_bridge_v2(ma, mb, tok, texts, token_map=None, steps=10, lr=3e-4):
+    """Zero-init + fine-tune bridge.
+    
+    W is initialized to zero so the bridge starts as identity on A (h_merged = h_A).
+    This is critical: LS init that predicts h_A from h_B doubles the hidden states
+    and produces garbage (norm ~24000). Zero init ensures stable training.
+    """
+    d_a, d_b = ma.config.n_embd, mb.config.hidden_size
+    bridge = OptimalBridge(d_a, d_b)
+    nn.init.zeros_(bridge.proj.weight)
+    bridge.to(DEVICE)
+    
+    enc = tok(texts, truncation=True, padding=True, max_length=64, return_tensors="pt")
+    ids, mask = enc.input_ids.to(DEVICE), enc.attention_mask.to(DEVICE)
+    
+    opt = torch.optim.AdamW(bridge.parameters(), lr=lr, weight_decay=0.01)
+    best = None; best_loss = float("inf")
+    model_dtype = next(ma.parameters()).dtype
+    stitched = lambda ids_b, labels: _stitch_forward(ma, mb, bridge, ids_b, mask, labels, model_dtype, token_map)
+    
+    torch.set_grad_enabled(True)
+    for s in range(steps):
+        opt.zero_grad()
+        loss, _ = stitched(ids, ids)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(bridge.parameters(), 1.0)
+        opt.step()
+        if loss.item() < best_loss:
+            best_loss = loss.item(); best = copy.deepcopy(bridge.state_dict())
+        if (s+1) % 5 == 0: print(f"    Step {s+1}/{steps} loss={loss.item():.4f}")
+    
+    bridge.load_state_dict(best if best else bridge.state_dict())
+    torch.set_grad_enabled(False)
+    return bridge
+
+
+@torch.no_grad()
+def stitch_generate(ma, mb, bridge, tok, prompt, max_new=30, token_map=None):
+    ma.eval(); mb.eval(); bridge.eval()
+    ids = tok(prompt, return_tensors="pt").input_ids.to(DEVICE)
+    for _ in range(max_new):
+        ids_b = torch.tensor([[token_map.get(i.item(), 0) for i in row] for row in ids],
+                              device=DEVICE) if token_map else ids
+        oa, ob = ma(ids, output_hidden_states=True), mb(ids_b, output_hidden_states=True)
+        ha, hb = oa.hidden_states[-1].float(), ob.hidden_states[-1].float()
+        k = min(ha.shape[1], hb.shape[1])
+        hf = bridge(ha[:, :k], hb[:, :k])
+        logits = ma.lm_head(hf.to(dtype=next(ma.parameters()).dtype))[:, -1, :] / 0.8
+        ids = torch.cat([ids, torch.multinomial(F.softmax(logits, dim=-1), 1)], dim=-1)
+    return tok.decode(ids[0], skip_special_tokens=True)
 
 
 @torch.no_grad()
