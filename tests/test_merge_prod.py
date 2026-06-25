@@ -19,22 +19,22 @@ def clean():
 
 # ─── CKA Tests ──────────────────────────────────────────────────────────────
 
-class TestCkaScore:
+class TestActivationSimilarity:
     def test_identical_vectors(self):
         x = torch.randn(6400)
-        score = merge_prod.cka_score(x, x)
+        score = merge_prod.activation_similarity(x, x)
         assert abs(score - 1.0) < 1e-4
 
     def test_random_vectors(self):
         x = torch.randn(6400)
         y = torch.randn(6400)
-        score = merge_prod.cka_score(x, y)
+        score = merge_prod.activation_similarity(x, y)
         assert -1 <= score <= 1
 
     def test_zero_input(self):
         x = torch.zeros(6400)
         y = torch.randn(6400)
-        score = merge_prod.cka_score(x, y)
+        score = merge_prod.activation_similarity(x, y)
         assert math.isfinite(score)
 
 
@@ -124,7 +124,7 @@ class TestMergeSameArch:
         from transformers import AutoModelForCausalLM, AutoTokenizer
         ma = AutoModelForCausalLM.from_pretrained('distilgpt2', torch_dtype=torch.float16).to(DEVICE).eval()
         mb = AutoModelForCausalLM.from_pretrained('distilgpt2', torch_dtype=torch.float16).to(DEVICE).eval()
-        merged = merge_prod.merge_same_arch(ma, mb, calib_texts=CALIB_TEXTS[:10], save_name=None)
+        merged, _ = merge_prod.merge_same_arch(ma, mb, calib_texts=CALIB_TEXTS[:10], save_name=None)
         assert merged is not None
         del ma, mb, merged; clean()
 
@@ -133,12 +133,29 @@ class TestMergeSameArch:
         ma = AutoModelForCausalLM.from_pretrained('distilgpt2', torch_dtype=torch.float16).to(DEVICE).eval()
         mb = AutoModelForCausalLM.from_pretrained('distilgpt2', torch_dtype=torch.float16).to(DEVICE).eval()
         tok = AutoTokenizer.from_pretrained('distilgpt2'); tok.pad_token = tok.eos_token
-        merged = merge_prod.merge_same_arch(ma, mb, calib_texts=CALIB_TEXTS[:10], save_name=None)
+        merged, _ = merge_prod.merge_same_arch(ma, mb, calib_texts=CALIB_TEXTS[:10], save_name=None)
         inp = tok("Hello world", return_tensors='pt').to(DEVICE)
         out = merged.generate(**inp, max_new_tokens=5, pad_token_id=tok.eos_token_id)
         text = tok.decode(out[0], skip_special_tokens=True)
         assert isinstance(text, str) and len(text) > 0
         del ma, mb, merged; clean()
+
+
+@pytest.mark.slow
+class TestMergeSameArchBridge:
+    def test_bridge_trains_and_generates(self):
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        ma = AutoModelForCausalLM.from_pretrained('distilgpt2', torch_dtype=torch.float16).to(DEVICE).eval()
+        mb = AutoModelForCausalLM.from_pretrained('distilgpt2', torch_dtype=torch.float16).to(DEVICE).eval()
+        tok = AutoTokenizer.from_pretrained('distilgpt2'); tok.pad_token = tok.eos_token
+        bridge, tok_out = merge_prod.merge_same_arch_bridge(ma, mb, tok, CALIB_TEXTS, steps=2, save_name=None)
+        assert bridge is not None
+        assert tok_out is not None
+        w_norm = bridge.proj.weight.norm().item()
+        assert w_norm > 0
+        gen = merge_prod.stitch_generate(ma, mb, bridge, tok, "Hello", max_new=5)
+        assert isinstance(gen, str) and len(gen) > 5
+        del ma, mb, bridge; clean()
 
 
 # ─── Generation Tests ───────────────────────────────────────────────────────

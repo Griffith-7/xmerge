@@ -2,10 +2,10 @@
 fusellm: Merge LLMs of different architectures and sizes WITHOUT full training.
 
 Canonical API (merge_prod):
-  merge_same_arch    — Deterministic CKA-guided merge for same-architecture models
-  build_bridge       — Zero-init bridge for cross-architecture fusion
-  train_bridge_v2    — Zero-init + fine-tune bridge (10 steps typical)
-  merge_diff_arch    — Full pipeline: bridge + eval + save for diff architectures
+  merge_same_arch         — Activation-similarity-guided weight-blend merge for same-architecture models (returns model, tokenizer)
+  merge_same_arch_bridge  — Representation-level bridge merge for same-architecture models, better for different sizes (returns bridge, tokenizer)
+  train_bridge_v2    — Zero-init bridge + cosine-LR fine-tune (20 steps, configurable)
+  merge_diff_arch    — Full pipeline: trained bridge + eval + save for diff architectures (configurable steps/lr)
   generate_bridge    — Generate text through a bridge
   stitch_generate    — Generate text through a trained bridge
   verify_generations — Print sample outputs from merged model or bridge

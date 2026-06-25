@@ -13,7 +13,7 @@ from fusellm import merge_prod, utils
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.float16
 SAVE_DIR = os.path.dirname(__file__)
-N_TEXTS = 200  # 100 calib + 100 eval = ~3200 tokens each
+N_TEXTS = 48  # 24 calib + 24 eval = ~1500 tokens each
 
 # Load WikiText-2 once
 print("Loading WikiText-2 validation set...")
@@ -94,7 +94,7 @@ for scenario in range(1, 5):
         s["mergekit"] = {"note": "MergeKit requires identical architecture. GPT-2 and DialoGPT share architecture, but MergeKit uses weight-space methods (TIES/DARE/SLERP) designed for task-vector merging, not base-model merging."}
         print("  fusellm CKA+spectral merge...")
         t0 = time.time()
-        merged = merge_prod.merge_same_arch(ma, mb, calib_texts=CALIB_TEXTS, save_name=None)
+        merged, _ = merge_prod.merge_same_arch(ma, mb, calib_texts=CALIB_TEXTS, save_name=None)
         pp = compute_ppl(merged, tok, EVAL_TEXTS)
         gen = generate(merged, tok)
         gib = detect_gibberish(gen)
@@ -113,15 +113,23 @@ for scenario in range(1, 5):
         s["reference_distilgpt2"] = {"ppl": round(compute_ppl(mb, tok, EVAL_TEXTS), 1)}
         print(f"  GPT-2 PPL: {s['reference_gpt2']['ppl']}, DistilGPT-2 PPL: {s['reference_distilgpt2']['ppl']}")
         s["mergekit"] = {"note": "Unsupported: different parameter sizes. MergeKit requires identical model dimensions."}
-        print("  fusellm CKA+spectral merge...")
+        print("  fusellm bridge (representation-level, recommended for diff sizes)...")
         t0 = time.time()
-        merged = merge_prod.merge_same_arch(ma, mb, calib_texts=CALIB_TEXTS, save_name=None)
-        pp = compute_ppl(merged, tok, EVAL_TEXTS)
-        gen = generate(merged, tok)
+        bridge, _ = merge_prod.merge_same_arch_bridge(ma, mb, tok, CALIB_TEXTS, steps=10, save_name=None)
+        total_loss, total_tokens = 0.0, 0
+        dtype = next(ma.parameters()).dtype
+        for t in EVAL_TEXTS:
+            enc = tok(t, truncation=True, max_length=64, return_tensors="pt")
+            ids = enc.input_ids.to(DEVICE); mask = enc.attention_mask.to(DEVICE)
+            loss, _ = merge_prod._stitch_forward(ma, mb, bridge, ids, mask, ids, dtype)
+            total_loss += loss.item() * ids.numel()
+            total_tokens += ids.numel()
+        pp = math.exp(total_loss / total_tokens)
+        gen = merge_prod.stitch_generate(ma, mb, bridge, tok, "The future of artificial intelligence is")
         gib = detect_gibberish(gen)
-        s["fusellm"] = {"ppl": round(pp, 1), "time": round(time.time() - t0, 1), "generation": gen, "gibberish": gib}
+        s["fusellm_bridge"] = {"ppl": round(pp, 1), "time": round(time.time() - t0, 1), "generation": gen, "gibberish": gib}
         print(f"    PPL: {pp:.1f}, gibberish: {gib}, gen: {gen[:70]}...")
-        del ma, mb, merged; clean()
+        del ma, mb, bridge; clean()
         results["S2: Same arch, diff size"] = s
 
     elif scenario == 3:
@@ -135,9 +143,9 @@ for scenario in range(1, 5):
         s["reference_opt125m"] = {"ppl": round(compute_ppl(mb, tok_opt, EVAL_TEXTS), 1)}
         print(f"  DistilGPT-2 PPL: {s['reference_distilgpt2']['ppl']}, OPT-125M PPL: {s['reference_opt125m']['ppl']}")
         s["mergekit"] = {"note": "Unsupported: different architectures (GPT-2 vs OPT). MergeKit requires identical model architectures."}
-        print("  fusellm bridge + 10-step training...")
+        print("  fusellm bridge + 20-step training...")
         t0 = time.time()
-        bridge = merge_prod.train_bridge_v2(ma, mb, tok, CALIB_TEXTS, steps=10)
+        bridge = merge_prod.train_bridge_v2(ma, mb, tok, CALIB_TEXTS, steps=20)
         total_loss, total_tokens = 0.0, 0
         dtype = next(ma.parameters()).dtype
         for t in EVAL_TEXTS:
@@ -168,9 +176,11 @@ for scenario in range(1, 5):
         match_rate = sum(1 for v in tm.values() if v > 0) / len(tm) * 100
         print(f"  Token map: {len(tm)} entries, match: {match_rate:.0f}%")
         s["mergekit"] = {"note": "Unsupported: different architectures AND different sizes. MergeKit cannot handle either."}
-        print("  fusellm cross-arch cross-tokenizer bridge...")
+        print("  fusellm cross-arch cross-tokenizer bridge (20 steps)...")
         t0 = time.time()
-        bridge = merge_prod.train_bridge_v2(ma, mb, tok_a, CALIB_TEXTS, token_map=tm, steps=10)
+        bridge = merge_prod.merge_diff_arch(ma, mb, calib_texts=CALIB_TEXTS, token_map=tm,
+                                            save_name="s4_benchmark", tok=tok_a,
+                                            steps=20, lr=3e-4, max_len=64)
         total_loss, total_tokens = 0.0, 0
         dtype = next(ma.parameters()).dtype
         for t in EVAL_TEXTS:

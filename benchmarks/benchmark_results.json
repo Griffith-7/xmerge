@@ -1,69 +1,69 @@
 {
   "S1: Same arch, same size": {
     "reference_gpt2": {
-      "ppl": 81.9
+      "ppl": 51.9
     },
     "reference_dialogpt": {
-      "ppl": 5008.2
+      "ppl": 5721.4
     },
     "mergekit": {
       "note": "MergeKit requires identical architecture. GPT-2 and DialoGPT share architecture, but MergeKit uses weight-space methods (TIES/DARE/SLERP) designed for task-vector merging, not base-model merging."
     },
     "fusellm": {
-      "ppl": 676.3,
-      "time": 37.2,
-      "generation": "The future of artificial intelligence is debated endlessly worldwide, Artificial Intelligence tends to rise globally Economic development declines rapidly Acrossarching societal trends Cognitive biases tendency Developmental disturbances Increasing technological developments Genetic adaptations Evolution Patterns evolving behavioral patterns Emerging ecological shifts Population Trends Climate",
+      "ppl": 5386.5,
+      "time": 128.1,
+      "generation": "The future of artificial intelligence is making automated robotic robots researchers scientists computers transmissions computer viruses causing creating caused causes neurological diseases illnesses resulting damaging brain disorders disease immune inflammation lymph neurot forming cardiovascular degener cancer strokes heart rupture type cancers mutated leukemiacancer cause infections",
       "gibberish": false
     }
   },
   "S2: Same arch, diff size": {
     "reference_gpt2": {
-      "ppl": 81.9
+      "ppl": 51.9
     },
     "reference_distilgpt2": {
-      "ppl": 119.4
+      "ppl": 80.5
     },
     "mergekit": {
       "note": "Unsupported: different parameter sizes. MergeKit requires identical model dimensions."
     },
-    "fusellm": {
-      "ppl": 1487.4,
-      "time": 37.0,
-      "generation": "The future of artificial intelligence is in a globalised version, or an unise it.\n ( human invention or form the same as computer was invented he's ( person). l\"..\" he. man,\" who came from somewhere",
+    "fusellm_bridge": {
+      "ppl": 47.6,
+      "time": 9.8,
+      "generation": "The future of artificial intelligence is uncertain, and there is certainly a lot of reason to be optimistic that humanity has the courage to innovate and socialize with machines in which to live (",
       "gibberish": false
     }
   },
   "S3: Diff arch, same size": {
     "reference_distilgpt2": {
-      "ppl": 119.4
+      "ppl": 80.5
     },
     "reference_opt125m": {
-      "ppl": 83.0
+      "ppl": 59.5
     },
     "mergekit": {
       "note": "Unsupported: different architectures (GPT-2 vs OPT). MergeKit requires identical model architectures."
     },
     "fusellm_bridge": {
-      "ppl": 97.7,
-      "time": 57.4,
-      "generation": "The future of artificial intelligence is a unique area in the sciences and humanities to be explored in the fields of technology and information sciences, including health and technology engineering and health sciences. It",
+      "ppl": 66.4,
+      "time": 17.0,
+      "generation": "The future of artificial intelligence is defined by how digital information is being transmitted and transmitted",
       "gibberish": false
     }
   },
   "S4: Diff arch, diff size": {
     "reference_distilgpt2": {
-      "ppl": 119.4
+      "ppl": 80.5
     },
     "reference_smollm2": {
-      "ppl": 54.3
+      "ppl": 34.1
     },
     "mergekit": {
       "note": "Unsupported: different architectures AND different sizes. MergeKit cannot handle either."
     },
     "fusellm_bridge": {
-      "ppl": 104.6,
-      "time": 78.0,
-      "generation": "The future of artificial intelligence is in a gradual process and is as of today as ever before seen in the field of machine vision and artificial intelligence . In the United States , our nation",
+      "ppl": 70.9,
+      "time": 10.5,
+      "generation": "The future of artificial intelligence is always going to be very challenging for the fields of engineering and manufacturing while the number of people who have become educated is rising and different engineering sectors have become",
       "gibberish": false
     }
   }
