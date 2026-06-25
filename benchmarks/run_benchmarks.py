@@ -92,15 +92,35 @@ for scenario in range(1, 5):
         s["reference_dialogpt"] = {"ppl": round(compute_ppl(mb, tok, EVAL_TEXTS), 1)}
         print(f"  GPT-2 PPL: {s['reference_gpt2']['ppl']}, DialoGPT PPL: {s['reference_dialogpt']['ppl']}")
         s["mergekit"] = {"note": "MergeKit requires identical architecture. GPT-2 and DialoGPT share architecture, but MergeKit uses weight-space methods (TIES/DARE/SLERP) designed for task-vector merging, not base-model merging."}
-        print("  fusellm CKA+spectral merge...")
+        print("  fusellm bridge (representation-level, recommended)...")
         t0 = time.time()
-        merged, _ = merge_prod.merge_same_arch(ma, mb, calib_texts=CALIB_TEXTS, save_name=None)
-        pp = compute_ppl(merged, tok, EVAL_TEXTS)
-        gen = generate(merged, tok)
+        bridge = merge_prod.train_bridge_v2(ma, mb, tok, CALIB_TEXTS, steps=20)
+        total_loss, total_tokens = 0.0, 0
+        dtype = next(ma.parameters()).dtype
+        for t in EVAL_TEXTS:
+            enc = tok(t, truncation=True, max_length=64, return_tensors="pt")
+            ids = enc.input_ids.to(DEVICE); mask = enc.attention_mask.to(DEVICE)
+            loss, _ = merge_prod._stitch_forward(ma, mb, bridge, ids, mask, ids, dtype)
+            total_loss += loss.item() * ids.numel()
+            total_tokens += ids.numel()
+        pp = math.exp(total_loss / total_tokens)
+        gen = merge_prod.stitch_generate(ma, mb, bridge, tok, "The future of artificial intelligence is")
         gib = detect_gibberish(gen)
-        s["fusellm"] = {"ppl": round(pp, 1), "time": round(time.time() - t0, 1), "generation": gen, "gibberish": gib}
-        print(f"    PPL: {pp:.1f}, gibberish: {gib}, gen: {gen[:70]}...")
-        del ma, mb, merged; clean()
+        s["fusellm_bridge"] = {"ppl": round(pp, 1), "time": round(time.time() - t0, 1), "generation": gen, "gibberish": gib}
+        print(f"    Bridge PPL: {pp:.1f}, gibberish: {gib}, gen: {gen[:70]}...")
+        del bridge; clean()
+
+        print("  fusellm CKA+spectral (weight-blend, for comparison)...")
+        ma2 = AutoModelForCausalLM.from_pretrained("gpt2", torch_dtype=DTYPE).to(DEVICE).eval()
+        mb2 = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-small", torch_dtype=DTYPE).to(DEVICE).eval()
+        tok2 = AutoTokenizer.from_pretrained("gpt2"); tok2.pad_token = tok2.eos_token
+        t0 = time.time()
+        merged, _ = merge_prod.merge_same_arch(ma2, mb2, calib_texts=CALIB_TEXTS, save_name=None)
+        pp2 = compute_ppl(merged, tok2, EVAL_TEXTS)
+        s["fusellm_weight_blend"] = {"ppl": round(pp2, 1), "time": round(time.time() - t0, 1)}
+        print(f"    Weight-blend PPL: {pp2:.1f}")
+        del ma2, mb2, merged, tok2; clean()
+        del ma, mb, tok; clean()
         results["S1: Same arch, same size"] = s
 
     elif scenario == 2:

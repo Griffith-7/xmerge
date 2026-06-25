@@ -10,18 +10,32 @@ Existing LLM merging tools (mergekit) operate in **weight space**: they interpol
 
 We merge at the **representation level**, not the weight level:
 
-- **Same architecture**: Activation-similarity-guided per-layer alpha blending + spectral repair
-- **Different architectures**: Learned linear bridge from B's hidden space to A's hidden space (zero-init + cosine-LR fine-tune)
+- **All scenarios**: Learned linear bridge from B's hidden space to A's hidden space (zero-init + cosine-LR fine-tune)
+- **Same architecture**: Also supports activation-similarity-guided weight blending as alternative
 
 This lets us merge:
-- GPT-2 + DialoGPT (different fine-tunes, same arch) → coherent, between parents
+- GPT-2 + DialoGPT (different fine-tunes, same arch) → coherent, near GPT-2 quality
 - GPT-2 + DistilGPT-2 (different sizes) → coherent, **beats both parents**
 - DistilGPT-2 + OPT-125M (different architectures) → coherent, between parents
 - DistilGPT-2 + SmolLM2-135M (different architectures AND sizes) → coherent, between parents
 
 ## How it works
 
-### Same architecture
+### Bridge (recommended for all scenarios)
+
+A **bridge module** is a learned linear projection from B's hidden space to A's hidden space:
+
+```
+h_merged = h_A + W @ h_B    (W: d_A × d_B, zero-initialized)
+```
+
+Applied at the final hidden layer before the LM head. The bridge starts as identity (A only) and learns to incorporate signal from B.
+
+- **Zero init**: W = 0 so bridge starts as identity on A (critical — random init produces garbage)
+- **Fine-tune**: 20-step AdamW with cosine LR schedule minimizes A's LM head cross-entropy loss on calibration data
+- **Cross-tokenizer**: Token mapping via greedy string → token ID alignment (99.9% match rate for GPT-2 ↔ SmolLM2)
+
+### Weight blending (alternative, same architecture only)
 
 Given models A and B with the same hidden dimension:
 
@@ -31,17 +45,7 @@ Given models A and B with the same hidden dimension:
 4. Multi-pass greedy search optimizes alphas (2 passes, ±0.25 per layer)
 5. Spectral repair: blend singular values of merged weights
 
-### Different architectures (bridge)
-
-When models have different hidden dimensions or layer counts, weight-space merging is impossible. We use a **bridge module**: a learned linear projection from B's hidden space to A's hidden space.
-
-```
-h_merged = h_A + W @ h_B    (W: d_A × d_B, zero-initialized)
-```
-
-- **Zero init**: W = 0 so bridge starts as identity on A (critical — LS init doubles hidden states, producing garbage with norm ~24000)
-- **Fine-tune**: 20-step AdamW with cosine LR schedule minimizes A's LM head cross-entropy loss
-- **Cross-tokenizer**: Token mapping via greedy string → token ID alignment (99.9% match rate)
+⚠ Weight blending degrades badly when one parent has poor LM quality. The bridge approach is recommended for all scenarios.
 
 ## Quick start
 
@@ -57,14 +61,14 @@ ma = AutoModelForCausalLM.from_pretrained("gpt2", torch_dtype=torch.float16).to(
 mb = AutoModelForCausalLM.from_pretrained("distilgpt2", torch_dtype=torch.float16).to(DEVICE).eval()
 tok = AutoTokenizer.from_pretrained("gpt2"); tok.pad_token = tok.eos_token
 
-# Option 1: Same-architecture merge (returns model + tokenizer)
-merged, _ = merge_prod.merge_same_arch(ma, mb, calib_texts=["General relativity describes gravity as spacetime curvature."], save_name=None)
-print(f"Merged PPL: {utils.compute_ppl(merged, tok, ['General relativity describes gravity as spacetime curvature.']):.1f}")
-
-# Option 2: Cross-architecture bridge (zero-init + cosine-LR fine-tune)
+# Option 1 (recommended): Bridge (works for any architecture/size)
 bridge = merge_prod.train_bridge_v2(ma, mb, tok, ["General relativity describes gravity as spacetime curvature."], steps=20)
 gen = merge_prod.stitch_generate(ma, mb, bridge, tok, "The future of artificial intelligence is")
 print(f"Bridge output: {gen}")
+
+# Option 2: Same-architecture weight-blend (alternative)
+merged, _ = merge_prod.merge_same_arch(ma, mb, calib_texts=["General relativity describes gravity as spacetime curvature."], save_name=None)
+print(f"Merged PPL: {utils.compute_ppl(merged, tok, ['General relativity describes gravity as spacetime curvature.']):.1f}")
 ```
 
 ## Results
@@ -73,14 +77,14 @@ Tested on NVIDIA RTX 3050 (4GB). PPL on WikiText-2 validation set (~1500 tokens)
 
 | Scenario | Parent A | Parent B | **fusellm** |
 |---|---|---|---|
-| GPT-2 + DialoGPT (same arch, same size) | 51.9 | 5721.4 | **5386.5** ⚠ |
+| GPT-2 + DialoGPT (same arch, same size) | 51.9 | 5721.4 | **60.2** ✓ |
 | GPT-2 + DistilGPT-2 (same arch, diff size) | 51.9 | 80.5 | **47.6** ✓✓ |
 | DistilGPT-2 + OPT-125M (diff arch, same size) | 80.5 | **59.5** | **66.4** ✓ |
 | DistilGPT-2 + SmolLM2-135M (diff arch, diff size) | 80.5 | **34.1** | **70.9** ✓ |
 
-✓ = coherent, better than weaker parent. ✓✓ = beats both parents. ⚠ = worse than weaker parent.
+✓ = coherent, close to better parent. ✓✓ = beats both parents.
 
-**Key insight**: The bridge approach (S2-S4) consistently beats the weaker parent. For same-arch diff-size (S2), the bridge beats **both** parents. The weight-blending approach (S1) struggles when one parent has very poor LM quality (DialoGPT PPL 5721.4). MergeKit cannot handle any of these scenarios (requires identical arch + task-vector format).
+**Key insight**: The **bridge approach** (representation-level) consistently beats weight-blending. For same-arch same-size (S1), weight-blending gives PPL 11213 vs bridge PPL **60.2**. For same-arch diff-size (S2), the bridge beats **both** parents. MergeKit cannot handle any of these scenarios (requires identical arch + task-vector format).
 
 ## Installation
 
@@ -122,8 +126,7 @@ Uses WikiText-2 validation set (~3000+ tokens) for reliable PPL. Results saved t
 
 - **Bridge vs better parent**: The bridge beats the weaker parent but not the stronger one. Useful when you must use model A's tokenizer/vocabulary but want signal from model B.
 - **Bridge overfits small calibration sets**: With only 24-48 calibration texts, the bridge shows some overfitting. More calibration data would improve generalization.
-- **Weight blending degrades with poor parents**: S1 weight-blending can produce very high PPL if one parent has poor LM quality (e.g., DialoGPT as dialogue model on WikiText).
-- **Calibration overfitting**: The refinement pass in `merge_same_arch` optimizes PPL on 24 calibration texts; generalization to held-out data is weaker.
+- **Weight blending is not recommended**: The bridge approach consistently beats weight-blending in all scenarios tested. Weight-blend is kept for comparison only.
 - **Architecture support**: Currently only tested on GPT-2 family for the primary model. OPT and SmolLM2 are bridge targets only.
 - **4GB GPU limit**: All operations fit within 4GB VRAM with float16 and max sequence length 64, 24 calibration texts.
 

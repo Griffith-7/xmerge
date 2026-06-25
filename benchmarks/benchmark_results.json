@@ -9,11 +9,15 @@
     "mergekit": {
       "note": "MergeKit requires identical architecture. GPT-2 and DialoGPT share architecture, but MergeKit uses weight-space methods (TIES/DARE/SLERP) designed for task-vector merging, not base-model merging."
     },
-    "fusellm": {
-      "ppl": 5386.5,
-      "time": 128.1,
-      "generation": "The future of artificial intelligence is making automated robotic robots researchers scientists computers transmissions computer viruses causing creating caused causes neurological diseases illnesses resulting damaging brain disorders disease immune inflammation lymph neurot forming cardiovascular degener cancer strokes heart rupture type cancers mutated leukemiacancer cause infections",
+    "fusellm_bridge": {
+      "ppl": 60.2,
+      "time": 27.5,
+      "generation": "The future of artificial intelligence is explosive, and it's only going to get bigger in the coming years.@ Citiz Citizendium Citizendium is a Citizendium",
       "gibberish": false
+    },
+    "fusellm_weight_blend": {
+      "ppl": 11213.3,
+      "time": 42.1
     }
   },
   "S2: Same arch, diff size": {
@@ -29,7 +33,7 @@
     "fusellm_bridge": {
       "ppl": 47.6,
       "time": 9.8,
-      "generation": "The future of artificial intelligence is uncertain, and there is certainly a lot of reason to be optimistic that humanity has the courage to innovate and socialize with machines in which to live (",
+      "generation": "The future of artificial intelligence is uncertain.\"It's",
       "gibberish": false
     }
   },
@@ -45,8 +49,8 @@
     },
     "fusellm_bridge": {
       "ppl": 66.4,
-      "time": 17.0,
-      "generation": "The future of artificial intelligence is defined by how digital information is being transmitted and transmitted",
+      "time": 16.4,
+      "generation": "The future of artificial intelligence is very much in the realm of cognitive psychology .",
       "gibberish": false
     }
   },
@@ -62,8 +66,8 @@
     },
     "fusellm_bridge": {
       "ppl": 70.9,
-      "time": 10.5,
-      "generation": "The future of artificial intelligence is always going to be very challenging for the fields of engineering and manufacturing while the number of people who have become educated is rising and different engineering sectors have become",
+      "time": 10.2,
+      "generation": "The future of artificial intelligence is not as exciting as the one with which it was directed or programmed as it was made.",
       "gibberish": false
     }
   }
