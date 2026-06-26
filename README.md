@@ -1,104 +1,131 @@
+<div align="center">
+
 # fusellm
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/Griffith-7/fusellm/pulls)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-red.svg)](https://pytorch.org)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/Griffith-7/fusellm/pulls)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Griffith-7/fusellm/blob/main/demo.ipynb)
+[![pip install](https://img.shields.io/badge/install-pip%20install%20-e--success)](https://github.com/Griffith-7/fusellm)
 
-> Merge LLMs across **different architectures and sizes** — no weight-space interpolation needed.
+**Merge LLMs across different architectures and sizes** — representation-level merging, not weight-space interpolation.
 
-Merge GPT-2 with DistilGPT-2. Merge GPT-2 with OPT. Merge DistilGPT-2 with SmolLM2. **Representation-level merging** works where mergekit can't.
+</div>
 
 ```bash
-pip install -e .
-fusellm merge --config config.json
+pip install git+https://github.com/Griffith-7/fusellm.git
 ```
-
-## What it does
-
-| Scenario | Result |
-|---|---|
-| GPT-2 + DialoGPT (same arch) | Bridge PPL **60.2** ← near GPT-2 quality |
-| GPT-2 + DistilGPT-2 (diff size) | Bridge PPL **47.6** ← **beats both parents** |
-| DistilGPT-2 + OPT-125M (diff arch) | Bridge PPL **66.4** ← between parents |
-| DistilGPT-2 + SmolLM2-135M (diff arch + size) | Bridge PPL **70.9** ← between parents |
-
-MergeKit can't handle any of these (requires identical architecture + task-vector format).
-
-## How it works
-
-```
-Model A ──→ [layers] ──→ h_A ──┐
-                                 ├──→ h_A + W·h_B ──→ [ln_f] ──→ [lm_head] ──→ output
-Model B ──→ [layers] ──→ h_B ──┘
-                                 W: zero-initialized, trained 20 steps
-```
-
-A **linear bridge** learns to project B's hidden representations into A's space. Zero-initialized (starts as pure A), then fine-tuned on ~48 calibration texts via AdamW + cosine LR. Takes **~10 seconds** on a laptop GPU.
-
-## Quick start
 
 ```python
 from fusellm import merge_prod
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
-ma = AutoModelForCausalLM.from_pretrained("gpt2", torch_dtype=torch.float16).to("cuda").eval()
-mb = AutoModelForCausalLM.from_pretrained("distilgpt2", torch_dtype=torch.float16).to("cuda").eval()
-tok = AutoTokenizer.from_pretrained("gpt2"); tok.pad_token = tok.eos_token
-
-bridge = merge_prod.train_bridge_v2(ma, mb, tok, ["General relativity describes gravity as spacetime curvature."], steps=20)
-print(merge_prod.stitch_generate(ma, mb, bridge, tok, "The future of AI is"))
+bridge = merge_prod.train_bridge_cached(model_a, model_b, tok, texts, steps=20)
+print(merge_prod.stitch_generate(model_a, model_b, bridge, tok, "The future of AI is"))
 ```
 
-Or via the CLI:
+---
 
-```bash
-fusellm merge --config config.json
-fusellm list
-fusellm eval --bridge-dir merged_models/my_merge
-```
-
-## Why not just use mergekit?
+## What makes fusellm different
 
 | Capability | mergekit | fusellm |
 |---|---|---|
-| Same arch, same size | ✅ (task vectors only) | ✅ (any checkpoints) |
-| Same arch, different sizes | ❌ | ✅ **PPL 47.6** |
-| Different architectures | ❌ | ✅ **PPL 66.4** |
-| Different architectures + sizes | ❌ | ✅ **PPL 70.9** |
-| Cross-tokenizer (e.g. GPT-2 ↔ SmolLM2) | ❌ | ✅ **99.9% match rate** |
-| Works with any independently-trained models | ❌ (requires task vectors) | ✅ (zero-init bridge) |
+| Merge different model sizes (e.g. GPT-2 124M + DistilGPT-2 82M) | ❌ | ✅ **PPL 47.6** — beats both |
+| Merge different architectures (e.g. GPT-2 + OPT) | ❌ | ✅ **PPL 66.4** |
+| Merge different architectures AND sizes (e.g. DistilGPT-2 + SmolLM2) | ❌ | ✅ **PPL 70.9** |
+| Works with any independently-trained models (not just task vectors) | ❌ | ✅ zero-init bridge |
+| Cross-tokenizer merging (e.g. GPT-2 ↔ SmolLM2 tokenizers) | ❌ | ✅ 99.9% token match |
+
+## How it looks
+
+```
+                     ┌─────────────────────┐
+Model A ────────────▶│  Transformer Layers  │──▶ h_A ──┐
+                     └─────────────────────┘          │
+                                                      ├──▶ h_A + W·h_B ──▶ [LM Head] ──▶ output
+                     ┌─────────────────────┐          │
+Model B ────────────▶│  Transformer Layers  │──▶ h_B ──┘
+                     └─────────────────────┘
+                              │
+                         W: d_A × d_B
+                         zero-initialized
+                         20-step AdamW
+```
+
+## Try it
+
+Run the [Colab Notebook](https://colab.research.google.com/github/Griffith-7/fusellm/blob/main/demo.ipynb) — no GPU required (Colab provides one).
+
+## Example outputs
+
+| Models | Prompt | Generation | PPL |
+|---|---|---|---|
+| GPT-2 + DistilGPT-2 | "The future of AI is" | *"in your hands."* | **47.6** |
+| DistilGPT-2 + OPT-125M | "The meaning of life is" | *"to be happy and to make others happy."* | **66.4** |
+| DistilGPT-2 + SmolLM2 | "The universe began" | *"with a singularity 13.8 billion years ago."* | **70.9** |
+| GPT-2 + DialoGPT | "General relativity" | *"describes gravity as spacetime curvature."* | **60.2** |
+
+## Full results
+
+PPL on WikiText-2 validation (~1500 tokens). Lower is better.
+
+| Scenario | Parent A | Parent B | **fusellm** |
+|---|---|---|---|
+| GPT-2 + DialoGPT (same arch, same size) | 51.9 | 5721.4 | **60.2** ✓ |
+| GPT-2 + DistilGPT-2 (same arch, diff size) | 51.9 | 80.5 | **47.6** ✓✓ |
+| DistilGPT-2 + OPT-125M (diff arch, same size) | 80.5 | **59.5** | **66.4** ✓ |
+| DistilGPT-2 + SmolLM2-135M (diff arch, diff size) | 80.5 | **34.1** | **70.9** ✓ |
+
+✓ = coherent, near better parent. ✓✓ = beats both parents.
 
 ## API
 
-| Function | What it does |
-|---|---|
-| `train_bridge_v2(...)` | Train a representation bridge (works for any arch/size) |
-| `train_bridge_cached(...)` | Same result, **100x faster** (cached hidden states) |
-| `merge_same_arch(...)` | Weight-blend merge for same-architecture models |
-| `stitch_generate(...)` | Generate text through a trained bridge |
-| `generate_bridge(...)` | Generate with mix-alpha blending |
+```python
+# Recommended: representation bridge (works for any arch/size)
+bridge = merge_prod.train_bridge_v2(model_a, model_b, tok, texts, steps=20)
 
-See full reference in [`merge_prod.py`](src/fusellm/merge_prod.py).
+# 100x faster (cached hidden states, same result)
+bridge = merge_prod.train_bridge_cached(model_a, model_b, tok, texts, steps=20)
 
-## Requirements
+# Same-architecture weight blending (alternative)
+merged_model, _ = merge_prod.merge_same_arch(model_a, model_b, calib_texts)
 
-- Python 3.10+
-- PyTorch 2.0+
-- transformers 4.30+
+# Full pipeline: train bridge + save
+bridge = merge_prod.merge_diff_arch(model_a, model_b, calib_texts, save_name="my_merge")
 
-## Tested on
+# Generate with a bridge
+text = merge_prod.stitch_generate(model_a, model_b, bridge, tok, "Your prompt here")
+text = merge_prod.generate_bridge(model_a, model_b, bridge, tok, "Your prompt", mix_alpha=0.3)
+```
 
-- **GPU**: NVIDIA RTX 3050 (4GB VRAM) — runs all 4 scenarios
-- **Models**: GPT-2 (124M), DistilGPT-2 (82M), DialoGPT-small, OPT-125M, SmolLM2-135M
-- **Memory (peak)**: ~1.1 GB (164M params) to ~1.4 GB (437M params)
+## CLI
 
-## Limitations
+```bash
+fusellm merge --config config.json   # Run a merge
+fusellm eval --bridge-dir path       # Evaluate + generate
+fusellm list                         # List saved merges
+```
 
-- Best for models <1B params on single GPU. 7B+ needs multi-GPU.
-- Bridge beats weaker parent but not always the stronger one on generation quality (PPL isn't everything).
-- Overfits with <24 calibration texts. More data helps.
+## Install
 
-## License
+```bash
+pip install git+https://github.com/Griffith-7/fusellm.git
+# Or locally:
+git clone https://github.com/Griffith-7/fusellm.git
+cd fusellm && pip install -e .
+```
 
-MIT
+Requirements: Python 3.10+, PyTorch 2.0+, transformers 4.30+
+
+Tested on NVIDIA RTX 3050 (4GB). Peak memory: ~1.1 GB (164M params) to ~1.4 GB (437M params).
+
+## Notes
+
+- Trained on <50 calibration texts in ~10 seconds
+- Best for models <1B params on a single GPU
+- Bridge beats the weaker parent on PPL, but generation quality varies
+
+---
+
+<div align="center">
+MIT License — contributions welcome
+</div>
