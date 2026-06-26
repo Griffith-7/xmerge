@@ -32,6 +32,9 @@ dev = ["pytest>=7.0.0"]
 package-dir = {"" = "src"}
 packages = ["fusellm"]
 
+[project.scripts]
+fusellm = "fusellm.cli:main"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [

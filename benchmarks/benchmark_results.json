@@ -11,13 +11,13 @@
     },
     "fusellm_bridge": {
       "ppl": 60.2,
-      "time": 27.2,
-      "generation": "The future of artificial intelligence is going to be very difficult to answer just because the real world is changing.@ Citiz Citiz Citiz Citiz Citiz",
+      "time": 27.0,
+      "generation": "The future of artificial intelligence is disruptive to conventional economy and mass media strategies and is causing a proliferation of \"madmen who can only do one job at a time,\" Citizen said",
       "gibberish": false
     },
     "fusellm_weight_blend": {
-      "ppl": 220.6,
-      "time": 65.2
+      "ppl": 383.1,
+      "time": 64.6
     }
   },
   "S2: Same arch, diff size": {
@@ -33,7 +33,7 @@
     "fusellm_bridge": {
       "ppl": 47.6,
       "time": 10.1,
-      "generation": "The future of artificial intelligence is very uncertain,\" says Ornstein.",
+      "generation": "The future of artificial intelligence is in your hands.\"",
       "gibberish": false
     }
   },
@@ -49,8 +49,8 @@
     },
     "fusellm_bridge": {
       "ppl": 66.4,
-      "time": 105.7,
-      "generation": "The future of artificial intelligence is fickle, with technological advances making it harder for humans to do so, while the task of saying \"this is just us,\" remains to be seen",
+      "time": 16.7,
+      "generation": "The future of artificial intelligence is going to be an extremely difficult time with technology which can be found in the 21st century , or as one might call it , although there is no",
       "gibberish": false
     }
   },
@@ -66,8 +66,8 @@
     },
     "fusellm_bridge": {
       "ppl": 70.9,
-      "time": 10.3,
-      "generation": "The future of artificial intelligence is not far from . . .",
+      "time": 10.0,
+      "generation": "The future of artificial intelligence is in the future \u2013 at least in the first half of 2017 \u2013 but the future of artificial intelligence should include both of the three main fields \u2013 traditional people",
       "gibberish": false
     }
   }

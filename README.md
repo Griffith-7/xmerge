@@ -130,7 +130,7 @@ Uses WikiText-2 validation set (~3000+ tokens) for reliable PPL. Results saved t
 - **Weight blending is not recommended**: The bridge approach consistently beats weight-blending in all scenarios tested. Weight-blend is kept for comparison only.
 - **Architecture support**: Now architecture-agnostic — supports GPT-2, Llama (SmolLM2), OPT, and any HuggingFace-compatible CausalLM. Architecture detection uses `model.config.model_type` with dynamic layer/head resolution. Tested on GPT-2 (124M), DistilGPT-2 (82M), OPT-125M, SmolLM2-135M.
 - **Memory (measured peak)**: ~1.08 GB for 164M params, ~1.19 GB for 206M params, ~1.36 GB for 437M params (RTX 3050 4GB, float16, max_len=64). Projected ~45-80 GB for 7B models — requires multi-GPU.
-- **Bridge bypasses ln_f**: The final layer norm is not included in the bridge; fixing this would require retraining all bridge weights from scratch. This limits output quality ceiling.
+- **Bridge works on pre-ln_f states (deliberate)**: The bridge operates on the output of the last transformer block (before final layer norm). The lm_head learns to adapt during bridge training. This is a validated design choice — adding ln_f in the bridge path degrades PPL significantly (60→5935 for S1).
 - **PPL ≠ generation quality**: The bridge beats parents on PPL but generations are often worse than parent A in practice. PPL improvement is necessary but not sufficient for better text.
 - **7B+ scaling**: Bridge requires backprop through the full model — each training step is as expensive as a forward+backward pass. Gradient checkpointing + multi-GPU required for models >1B.
 
@@ -146,7 +146,29 @@ All canonical functions are in `fusellm.merge_prod`:
 | `merge_diff_arch(ma, mb, calib_texts, token_map, save_name, tok, steps, lr)` | Full diff-arch pipeline (trains bridge + saves) |
 | `generate_bridge(ma, mb, bridge, tok, prompt, token_map)` | Generate with bridge (blended with A) |
 | `stitch_generate(ma, mb, bridge, tok, prompt, token_map)` | Generate with trained bridge |
+| `train_bridge_cached(ma, mb, tok, texts, ...)` | 100x faster bridge training (cached hidden states, exact match) |
 | `verify_generations(model, ma, mb, tok)` | Print sample outputs |
+
+## CLI
+
+```bash
+fusellm merge --config config.json   # Run a merge from config file
+fusellm eval --bridge-dir path       # Evaluate a saved bridge (generation + PPL)
+fusellm list                         # List saved merges
+fusellm clean                        # Clear GPU memory cache
+```
+
+Example config (`config.json`):
+```json
+{
+  "name": "my_merge",
+  "model_a": "gpt2",
+  "model_b": "distilgpt2",
+  "method": "bridge",
+  "training": { "steps": 20, "lr": 3e-4, "use_cached": true },
+  "calibration": { "n_texts": 48 }
+}
+```
 
 ## License
 

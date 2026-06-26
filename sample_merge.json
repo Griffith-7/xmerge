@@ -1,0 +1,15 @@
+{
+    "name": "cli_test_merge",
+    "model_a": "distilgpt2",
+    "model_b": "distilgpt2",
+    "method": "bridge",
+    "training": {
+        "steps": 3,
+        "lr": 3e-4,
+        "max_length": 64,
+        "use_cached": true
+    },
+    "calibration": {
+        "n_texts": 8
+    }
+}

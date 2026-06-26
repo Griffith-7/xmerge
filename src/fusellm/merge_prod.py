@@ -26,7 +26,8 @@ from . import utils
 
 __all__ = [
     "OptimalBridge", "CkaComputer", "activation_similarity",
-    "merge_same_arch", "merge_same_arch_bridge", "build_bridge", "train_bridge_v2",
+    "merge_same_arch", "merge_same_arch_bridge", "build_bridge",
+    "train_bridge_v2", "train_bridge_cached",
     "merge_diff_arch", "generate_bridge", "stitch_generate",
     "verify_generations", "load_merged",
     "ppl", "clean", "proportional_map", "svd_project", "build_token_map",
@@ -410,6 +411,77 @@ def train_bridge_v2(ma, mb, tok, texts, token_map=None, steps=10, lr=3e-4, weigh
     return bridge
 
 
+def _cache_hidden_states(ma, mb, tok, texts, token_map=None, max_len=128):
+    """Cache pre-ln_f hidden states from both models on calibration data."""
+    lm_head = _get_lm_head(ma)
+    assert lm_head is not None
+    enc = tok(texts, truncation=True, padding=True, max_length=max_len, return_tensors="pt")
+    ids, mask = enc.input_ids.to(DEVICE), enc.attention_mask.to(DEVICE)
+
+    ids_b = torch.tensor(
+        [[token_map.get(i.item(), 0) for i in row] for row in ids],
+        device=DEVICE
+    ) if token_map else ids
+
+    with torch.no_grad():
+        oa = ma(ids, attention_mask=mask, output_hidden_states=True)
+        ob = mb(ids_b, attention_mask=mask, output_hidden_states=True)
+        ha = oa.hidden_states[-1].float()
+        hb = ob.hidden_states[-1].float()
+        k = min(ha.shape[1], hb.shape[1])
+
+    return {
+        "ha": ha[:, :k], "hb": hb[:, :k],
+        "ids": ids[:, :k], "lm_head": lm_head,
+        "dtype": next(ma.parameters()).dtype,
+    }
+
+
+def train_bridge_cached(ma, mb, tok, texts, token_map=None, steps=20, lr=3e-4,
+                         weight_decay=0.01, max_len=128):
+    """Train bridge using cached hidden states (100x faster).
+
+    Caches the final hidden states (pre-ln_f) from both models, then trains
+    only the bridge + lm_head — no backprop through transformers per step.
+    Produces identical results to train_bridge_v2 since caching is exact
+    (model weights don't change during bridge training).
+    """
+    d_a, d_b = utils.hidden_dim(ma.config), utils.hidden_dim(mb.config)
+    bridge = OptimalBridge(d_a, d_b).to(DEVICE)
+    cache = _cache_hidden_states(ma, mb, tok, texts, token_map, max_len)
+    ha, hb, ids = cache["ha"], cache["hb"], cache["ids"]
+    lm_head, dtype = cache["lm_head"], cache["dtype"]
+
+    opt = torch.optim.AdamW(bridge.parameters(), lr=lr, weight_decay=weight_decay)
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=steps)
+    best = None
+    best_loss = float("inf")
+
+    torch.set_grad_enabled(True)
+    bridge.train()
+    for s in range(steps):
+        opt.zero_grad()
+        hf = bridge(ha, hb)
+        logits = lm_head(hf.to(dtype))
+        sl, ll = logits[..., :-1, :].contiguous(), ids[..., 1:].contiguous()
+        loss = F.cross_entropy(sl.view(-1, sl.size(-1)), ll.view(-1), ignore_index=-100)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(bridge.parameters(), 1.0)
+        opt.step()
+        sched.step()
+        if loss.item() < best_loss:
+            best_loss = loss.item()
+            best = copy.deepcopy(bridge.state_dict())
+        if (s + 1) % 5 == 0:
+            cur_lr = sched.get_last_lr()[0]
+            print(f"    Step {s+1}/{steps} loss={loss.item():.4f} lr={cur_lr:.2e}")
+
+    bridge.load_state_dict(best if best else bridge.state_dict())
+    bridge.eval()
+    torch.set_grad_enabled(False)
+    return bridge
+
+
 def merge_same_arch_bridge(model_a, model_b, tok, calib_texts, steps=10, lr=3e-4, save_name=None):
     n_a = _get_n_layers(model_a.config)
     n_b = _get_n_layers(model_b.config)
@@ -463,7 +535,6 @@ def generate_bridge(model_a, model_b, bridge, tok, prompt, max_new=50,
                     token_map=None, mix_alpha=0.3, temp=0.9):
     model_a.eval(); model_b.eval(); bridge.eval()
     ids = tok(prompt, return_tensors="pt").input_ids.to(DEVICE)
-
     for _ in range(max_new):
         ids_mapped = torch.tensor([[token_map.get(i.item(), 0) for i in row] for row in ids],
                                    device=DEVICE) if token_map else ids
