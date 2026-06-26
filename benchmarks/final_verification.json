@@ -1,0 +1,26 @@
+{
+  "weight_blend_fix": {
+    "gpt2_ppl": 51.9,
+    "merged_ppl": 200.4,
+    "ratio": 3.86
+  },
+  "bridge_S1": {
+    "ppl": 60.2,
+    "expected": 60.2,
+    "pass": true
+  },
+  "bridge_S2": {
+    "ppl": 47.6,
+    "expected": 47.6,
+    "pass": true
+  },
+  "bridge_S3": {
+    "ppl": 66.4,
+    "expected": 66.4,
+    "pass": true
+  },
+  "overfitting": {
+    "train_ppl": 85.3,
+    "eval_ppl": 168.9
+  }
+}

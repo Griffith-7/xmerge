@@ -11,13 +11,13 @@
     },
     "fusellm_bridge": {
       "ppl": 60.2,
-      "time": 27.5,
-      "generation": "The future of artificial intelligence is explosive, and it's only going to get bigger in the coming years.@ Citiz Citizendium Citizendium is a Citizendium",
+      "time": 27.2,
+      "generation": "The future of artificial intelligence is going to be very difficult to answer just because the real world is changing.@ Citiz Citiz Citiz Citiz Citiz",
       "gibberish": false
     },
     "fusellm_weight_blend": {
-      "ppl": 11213.3,
-      "time": 42.1
+      "ppl": 220.6,
+      "time": 65.2
     }
   },
   "S2: Same arch, diff size": {
@@ -32,8 +32,8 @@
     },
     "fusellm_bridge": {
       "ppl": 47.6,
-      "time": 9.8,
-      "generation": "The future of artificial intelligence is uncertain.\"It's",
+      "time": 10.1,
+      "generation": "The future of artificial intelligence is very uncertain,\" says Ornstein.",
       "gibberish": false
     }
   },
@@ -49,8 +49,8 @@
     },
     "fusellm_bridge": {
       "ppl": 66.4,
-      "time": 16.4,
-      "generation": "The future of artificial intelligence is very much in the realm of cognitive psychology .",
+      "time": 105.7,
+      "generation": "The future of artificial intelligence is fickle, with technological advances making it harder for humans to do so, while the task of saying \"this is just us,\" remains to be seen",
       "gibberish": false
     }
   },
@@ -66,8 +66,8 @@
     },
     "fusellm_bridge": {
       "ppl": 70.9,
-      "time": 10.2,
-      "generation": "The future of artificial intelligence is not as exciting as the one with which it was directed or programmed as it was made.",
+      "time": 10.3,
+      "generation": "The future of artificial intelligence is not far from . . .",
       "gibberish": false
     }
   }

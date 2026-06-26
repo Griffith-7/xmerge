@@ -1,0 +1,76 @@
+{
+  "test1_repeatability_trial1": {
+    "ppl": 47.6,
+    "time_s": 74.9
+  },
+  "test1_repeatability_trial2": {
+    "ppl": 47.6,
+    "time_s": 229.8
+  },
+  "test2_zero_init": {
+    "a_only_ppl": 79.4,
+    "untrained_bridge_ppl": 80.5,
+    "diff": 1.143
+  },
+  "test3_overfitting": {
+    "train_ppl": 1.1,
+    "eval_ppl": 168.9,
+    "generalization_gap": 167.9
+  },
+  "test4_ablation": {
+    "random_init_ppl": 32578712109.9,
+    "zero_init_ppl": 80.5,
+    "trained_ppl": 66.4
+  },
+  "test5_generation_quality": [
+    {
+      "prompt": "The future of artificial intelligence is",
+      "parent_a_generation": "The future of artificial intelligence is bright \u2014 but it's in an uncertain place in the field of science.\n\nThe AI revolution is in its infancy. The idea is to create",
+      "merged_generation": "The future of artificial intelligence is certainly important.Follow @343rf\n"
+    },
+    {
+      "prompt": "In the beginning, there was",
+      "parent_a_generation": "In the beginning, there was no hope of a world without women.\n\n\"I think the future is going to be dominated by men, and that is one of the reasons",
+      "merged_generation": "In the beginning, there was no technology or technological development to be found to make a smartphone."
+    },
+    {
+      "prompt": "The meaning of life is",
+      "parent_a_generation": "The meaning of life is something that is in flux. Our understanding of it is, in essence, that of the whole.\n\nThe meaning of life is important. There",
+      "merged_generation": "The meaning of life is the beginning, and the end is chosen to be the end of it."
+    },
+    {
+      "prompt": "Once upon a time in a",
+      "parent_a_generation": "Once upon a time in a very quiet place, and there were no children and children, the man became the father, and they became one.\n\nThe man said, \"",
+      "merged_generation": "Once upon a time in a notorious warzone, the sun rises at night and there are cries of \""
+    },
+    {
+      "prompt": "The most important thing to remember is",
+      "parent_a_generation": "The most important thing to remember is your personal expectations when setting your goals. I'm not saying you should feel anything out of the ordinary, but for any given person, every day is",
+      "merged_generation": "The most important thing to remember is that it's too early to tell who will win."
+    }
+  ],
+  "test6_cross_eval": {
+    "parent_a_ppl_custom": 36.8,
+    "bridge_ppl_custom": 46.0
+  },
+  "test7_random_weights": {
+    "ppl": 58469.0,
+    "is_garbage": true
+  },
+  "test8_batch_consistency": {
+    "batch1_ppl": 81.5017,
+    "batch4_ppl": 79.2869,
+    "batch16_ppl": 79.1581,
+    "max_diff": 2.3436
+  },
+  "test9_gradient_flow": {
+    "weight_norm_before": 0.0,
+    "weight_norm_after": 1.594808,
+    "weights_changed": true
+  },
+  "test10_memory": {
+    "memory_before_mb": 17.0,
+    "memory_after_mb": 500.0,
+    "peak_memory_mb": 9038.0
+  }
+}

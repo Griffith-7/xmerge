@@ -1,0 +1,10 @@
+{
+  "SmolLM2-135M as A, DistilGPT2 as B": {
+    "status": "CkaComputer_fail",
+    "error": "'LlamaForCausalLM' object has no attribute 'transformer'"
+  },
+  "TinyLlama-1.1B as A, DistilGPT2 as B": {
+    "status": "CkaComputer_fail",
+    "error": "'LlamaForCausalLM' object has no attribute 'transformer'"
+  }
+}

@@ -37,6 +37,58 @@ DTYPE = torch.float16
 SAVE_DIR = "merged_models"
 
 
+# ─── ARCHITECTURE DETECTION ──────────────────────────────────────────────
+
+def _get_n_layers(config):
+    return getattr(config, 'num_hidden_layers',
+           getattr(config, 'n_layer',
+           getattr(config, 'n_layers', None)))
+
+def _get_layer_list(model):
+    if hasattr(model, 'transformer') and hasattr(model.transformer, 'h'):
+        return model.transformer.h
+    if hasattr(model, 'model'):
+        if hasattr(model.model, 'layers'):
+            return model.model.layers
+        if hasattr(model.model, 'decoder') and hasattr(model.model.decoder, 'layers'):
+            return model.model.decoder.layers
+    raise AttributeError(f"Cannot find transformer layer list in {type(model).__name__}. "
+                         f"Supported: GPT-2, Llama, OPT, Mistral, Falcon, CodeGen, etc.")
+
+def _get_layer_prefix(model):
+    mt = getattr(model.config, 'model_type', '').lower()
+    prefixes = {
+        'gpt2': 'transformer.h.', 'gpt_neo': 'transformer.h.', 'gptj': 'transformer.h.',
+        'codegen': 'transformer.h.', 'falcon': 'transformer.h.',
+        'llama': 'model.layers.', 'mistral': 'model.layers.', 'gemma': 'model.layers.',
+        'qwen2': 'model.layers.', 'phi': 'model.layers.', 'phi3': 'model.layers.',
+        'smollm2': 'model.layers.', 'stablelm': 'model.layers.', 'cohere': 'model.layers.',
+        'opt': 'model.decoder.layers.',
+    }
+    if mt in prefixes:
+        return prefixes[mt]
+    if hasattr(model, 'transformer') and hasattr(model.transformer, 'h'):
+        return 'transformer.h.'
+    if hasattr(model, 'model') and hasattr(model.model, 'layers'):
+        return 'model.layers.'
+    if hasattr(model, 'model') and hasattr(model.model, 'decoder') and hasattr(model.model.decoder, 'layers'):
+        return 'model.decoder.layers.'
+    return 'transformer.h.'
+
+def _get_lm_head(model):
+    if hasattr(model, 'lm_head'):
+        return model.lm_head
+    if hasattr(model, 'embed_out'):
+        return model.embed_out
+    if hasattr(model, 'output_projection'):
+        return model.output_projection
+    for name, mod in model.named_modules():
+        if 'lm_head' in name.lower() or 'embed_out' in name.lower():
+            if isinstance(mod, nn.Linear):
+                return mod
+    return None
+
+
 # ─── HELPERS ───────────────────────────────────────────────────────────────
 
 def load_texts(n=64):
@@ -51,6 +103,19 @@ def ppl(model, ids, mask=None):
 def clean():
     gc.collect()
     if DEVICE == "cuda": torch.cuda.empty_cache()
+
+def _get_final_norm(model):
+    if hasattr(model, 'transformer') and hasattr(model.transformer, 'ln_f'):
+        return model.transformer.ln_f
+    if hasattr(model, 'model') and hasattr(model.model, 'norm'):
+        return model.model.norm
+    if hasattr(model, 'model') and hasattr(model.model, 'decoder') and hasattr(model.model.decoder, 'final_layer_norm'):
+        return model.model.decoder.final_layer_norm
+    if hasattr(model, 'model') and hasattr(model.model, 'decoder') and hasattr(model.model.decoder, 'norm'):
+        return model.model.decoder.norm
+    if hasattr(model, 'base_model') and hasattr(model.base_model, 'norm'):
+        return model.base_model.norm
+    return None
 
 def proportional_map(n_a, n_b):
     return {i: min(int((i + 0.5) * n_b / n_a), n_b - 1) for i in range(n_a)}
@@ -81,9 +146,10 @@ class CkaComputer:
     def __init__(self, model, n_layers):
         self.hiddens = {}
         self.handles = []
+        layer_list = _get_layer_list(model)
         for i in range(n_layers):
             self.handles.append(
-                model.transformer.h[i].register_forward_hook(self._hook(i))
+                layer_list[i].register_forward_hook(self._hook(i))
             )
 
     def _hook(self, i):
@@ -114,8 +180,8 @@ def merge_same_arch(model_a, model_b, calib_texts=None, save_name="merged_same_a
     enc = tok(calib_texts[:24], truncation=True, padding=True, max_length=128, return_tensors="pt")
     ids, mask = enc.input_ids.to(DEVICE), enc.attention_mask.to(DEVICE)
 
-    n_a = model_a.config.n_layer
-    n_b = model_b.config.n_layer
+    n_a = _get_n_layers(model_a.config)
+    n_b = _get_n_layers(model_b.config)
 
     print("  Computing layer activation similarities...")
     cka_a = CkaComputer(model_a, n_a)
@@ -159,8 +225,16 @@ def merge_same_arch(model_a, model_b, calib_texts=None, save_name="merged_same_a
     best_ppl = ppl(m, ids, mask)
     best_alphas = dict(alphas)
 
-    print(f"  Init PPL: {best_ppl:.1f} | Refining...")
-    for phase, steps in [("coarse", [0.25, -0.25]), ("fine", [0.1, -0.1])]:
+    # Check pure A baseline — if blending a bad parent only makes things worse
+    ppl_pure_a = ppl(model_a, ids, mask)
+    print(f"  Init PPL: {best_ppl:.1f} | Pure-A PPL: {ppl_pure_a:.1f} | Refining...")
+    if ppl_pure_a < best_ppl:
+        best_ppl = ppl_pure_a
+        best_alphas = {i: 1.0 for i in range(n_a)}
+        merged_sd = _apply_merge(model_a, model_b, mapping, best_alphas, b_proj)
+        m.load_state_dict(merged_sd, strict=False)
+
+    for phase, steps in [("coarse", [0.25, -0.25]), ("fine", [0.1, -0.1]), ("ultra", [0.5, -0.5, 0.05, -0.05])]:
         for layer in range(n_a):
             orig = best_alphas[layer]
             best_a, best_p = orig, best_ppl
@@ -210,21 +284,24 @@ def _spectral_repair(merged_sd, sd_a, strength=0.3):
 
 
 def _project_b_weights(model_a, model_b, mapping):
+    prefix_a = _get_layer_prefix(model_a)
+    prefix_b = _get_layer_prefix(model_b)
     sd_a, sd_b = model_a.state_dict(), model_b.state_dict()
     layers_a = {}
     for k, v in sd_a.items():
-        if k.startswith("transformer.h."):
-            parts = k.split("."); idx, local = int(parts[2]), ".".join(parts[3:])
+        if k.startswith(prefix_a):
+            parts = k[len(prefix_a):].split(".")
+            idx, local = int(parts[0]), ".".join(parts[1:])
             layers_a.setdefault(idx, {})[local] = v
     proj = {}
     for i_a, i_b in mapping.items():
         for local, w_a in layers_a[i_a].items():
-            bk = f"transformer.h.{i_b}.{local}"
+            bk = f"{prefix_b}{i_b}.{local}"
             if bk in sd_b:
                 w_b = sd_b[bk].float()
                 proj[(i_a, local)] = w_b if w_a.shape == w_b.shape else svd_project(w_b, *w_a.shape)
     for k in sd_a:
-        if not k.startswith("transformer.h.") and k in sd_b:
+        if not k.startswith(prefix_a) and k in sd_b:
             if sd_a[k].shape == sd_b[k].shape:
                 proj[k] = sd_b[k].float()
     return proj
@@ -238,18 +315,25 @@ def _is_embed_or_output_key(key):
     return bool(parts & _EMBED_OUTPUT_TOKENS)
 
 def _apply_merge(model_a, model_b, mapping, alphas, b_proj):
+    prefix = _get_layer_prefix(model_a)
     sd_a = model_a.state_dict()
     sd = {}
     for k, v in sd_a.items():
         if _is_embed_or_output_key(k):
             sd[k] = v.clone()
+        elif k.startswith(prefix):
+            sd[k] = v.clone()
         elif k in b_proj:
-            sd[k] = (0.5 * v.float() + 0.5 * b_proj[k])
+            avg_alpha = sum(alphas.values()) / max(len(alphas), 1)
+            sd[k] = (avg_alpha * v.float() + (1 - avg_alpha) * b_proj[k])
         else:
             sd[k] = v.clone()
     for k in sd_a:
-        if k.startswith("transformer.h."):
-            parts = k.split("."); i_a = int(parts[2]); local = ".".join(parts[3:])
+        if k.startswith(prefix):
+            rest = k[len(prefix):]
+            parts = rest.split(".")
+            i_a = int(parts[0])
+            local = ".".join(parts[1:])
             a = alphas.get(i_a, 0.5)
             key = (i_a, local)
             if key in b_proj:
@@ -277,6 +361,8 @@ def build_bridge(ma, mb, tok, texts, token_map=None):
 
 
 def _stitch_forward(ma, mb, bridge, ids, mask, labels, dtype, token_map=None):
+    lm_head = _get_lm_head(ma)
+    assert lm_head is not None, f"Cannot find lm_head in {type(ma).__name__}"
     with torch.no_grad():
         ids_b = torch.tensor([[token_map.get(i.item(), 0) for i in row] for row in ids],
                               device=DEVICE) if token_map else ids
@@ -284,7 +370,7 @@ def _stitch_forward(ma, mb, bridge, ids, mask, labels, dtype, token_map=None):
         ha, hb = oa.hidden_states[-1].float(), ob.hidden_states[-1].float()
         k = min(ha.shape[1], hb.shape[1])
     hf = bridge(ha[:, :k], hb[:, :k])
-    logits = ma.lm_head(hf.to(dtype))
+    logits = lm_head(hf.to(dtype))
     sl, ll = logits[..., :-1, :].contiguous(), labels[:, :k][..., 1:].contiguous()
     loss = F.cross_entropy(sl.view(-1, sl.size(-1)), ll.view(-1), ignore_index=-100)
     return loss, logits
@@ -325,8 +411,8 @@ def train_bridge_v2(ma, mb, tok, texts, token_map=None, steps=10, lr=3e-4, weigh
 
 
 def merge_same_arch_bridge(model_a, model_b, tok, calib_texts, steps=10, lr=3e-4, save_name=None):
-    n_a = model_a.config.n_layer
-    n_b = model_b.config.n_layer
+    n_a = _get_n_layers(model_a.config)
+    n_b = _get_n_layers(model_b.config)
     print(f"  Same-arch bridge: {n_a} layers (A) + {n_b} layers (B), {steps} steps")
 
     bridge = train_bridge_v2(model_a, model_b, tok, calib_texts, steps=steps, lr=lr)
@@ -366,7 +452,8 @@ def stitch_generate(ma, mb, bridge, tok, prompt, max_new=30, token_map=None):
         ha, hb = oa.hidden_states[-1].float(), ob.hidden_states[-1].float()
         k = min(ha.shape[1], hb.shape[1])
         hf = bridge(ha[:, :k], hb[:, :k])
-        logits = ma.lm_head(hf.to(dtype=next(ma.parameters()).dtype))[:, -1, :] / 0.8
+        lm_head = _get_lm_head(ma)
+        logits = lm_head(hf.to(dtype=next(ma.parameters()).dtype))[:, -1, :] / 0.8
         ids = torch.cat([ids, torch.multinomial(F.softmax(logits, dim=-1), 1)], dim=-1)
     return tok.decode(ids[0], skip_special_tokens=True)
 
@@ -386,7 +473,8 @@ def generate_bridge(model_a, model_b, bridge, tok, prompt, max_new=50,
         k = min(ha.shape[1], hb.shape[1])
         h_bridge = bridge(ha[:, :k], hb[:, :k])
         hf = ha[:, :k] + mix_alpha * (h_bridge - ha[:, :k])
-        logits = model_a.lm_head(hf.to(dtype=next(model_a.parameters()).dtype))[:, -1, :] / temp
+        lm_head = _get_lm_head(model_a)
+        logits = lm_head(hf.to(dtype=next(model_a.parameters()).dtype))[:, -1, :] / temp
         probs = F.softmax(logits, dim=-1)
         ids = torch.cat([ids, torch.multinomial(probs, 1)], dim=-1)
 
@@ -423,7 +511,8 @@ def merge_diff_arch(model_a, model_b, calib_texts=None, token_map=None,
         ha, hb = oa.hidden_states[-1].float(), ob.hidden_states[-1].float()
         k = min(ha.shape[1], hb.shape[1])
         hf = bridge(ha[:, :k], hb[:, :k])
-        logits = model_a.lm_head(hf.to(dtype))
+        lm_head = _get_lm_head(model_a)
+        logits = lm_head(hf.to(dtype))
         sl, ll = logits[..., :-1, :].contiguous(), ids[:, :k][..., 1:].contiguous()
         loss = F.cross_entropy(sl.view(-1, sl.size(-1)), ll.view(-1), ignore_index=-100)
         b_ppl = math.exp(loss.item())

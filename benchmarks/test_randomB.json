@@ -1,0 +1,68 @@
+[
+  {
+    "trial": 0,
+    "label": "real B (DistilGPT-2)",
+    "train_ppl": 2.9,
+    "eval_ppl": 88.2,
+    "domain_ppl": 54.6,
+    "zero_init_ppl": 81.5,
+    "cos(hf,ha)": 0.9995,
+    "proj_pct": 3.1,
+    "gen": "The future of AI is in the hands of the "
+  },
+  {
+    "trial": 0,
+    "label": "random B (OPT config)",
+    "train_ppl": 4.0,
+    "eval_ppl": 103.4,
+    "domain_ppl": 48.7,
+    "zero_init_ppl": 81.5,
+    "cos(hf,ha)": 0.9992,
+    "proj_pct": 4.1,
+    "gen": "The future of AI is at stake in a variet"
+  },
+  {
+    "trial": 1,
+    "label": "real B (DistilGPT-2)",
+    "train_ppl": 2.9,
+    "eval_ppl": 88.2,
+    "domain_ppl": 54.6,
+    "zero_init_ppl": 81.5,
+    "cos(hf,ha)": 0.9995,
+    "proj_pct": 3.1,
+    "gen": "The future of AI is unclear, but there a"
+  },
+  {
+    "trial": 1,
+    "label": "random B (OPT config)",
+    "train_ppl": 4.2,
+    "eval_ppl": 106.6,
+    "domain_ppl": 61.7,
+    "zero_init_ppl": 81.5,
+    "cos(hf,ha)": 0.9991,
+    "proj_pct": 4.3,
+    "gen": "The future of AI is unknown.Copyright \u00a9 "
+  },
+  {
+    "trial": 2,
+    "label": "real B (DistilGPT-2)",
+    "train_ppl": 2.9,
+    "eval_ppl": 88.2,
+    "domain_ppl": 54.6,
+    "zero_init_ppl": 81.5,
+    "cos(hf,ha)": 0.9995,
+    "proj_pct": 3.1,
+    "gen": "The future of AI is uncertain for people"
+  },
+  {
+    "trial": 2,
+    "label": "random B (OPT config)",
+    "train_ppl": 3.9,
+    "eval_ppl": 106.9,
+    "domain_ppl": 63.9,
+    "zero_init_ppl": 81.5,
+    "cos(hf,ha)": 0.9991,
+    "proj_pct": 4.3,
+    "gen": "The future of AI is in the hands of the "
+  }
+]

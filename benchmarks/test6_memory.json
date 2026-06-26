@@ -1,0 +1,44 @@
+[
+  {
+    "label": "82M+82M=164M",
+    "param_a_m": 82.0,
+    "param_b_m": 82.0,
+    "param_mem_expected_mb": 328.0,
+    "mem_baseline_mb": 0.0,
+    "mem_after_a_mb": 159.0,
+    "mem_after_both_mb": 319.0,
+    "mem_peak_mb": 1079.0,
+    "mem_final_mb": 413.0,
+    "overhead_ratio": 3.3,
+    "train_time_s": 1.0,
+    "gen": "Hello"
+  },
+  {
+    "label": "124M+82M=206M",
+    "param_a_m": 124.0,
+    "param_b_m": 82.0,
+    "param_mem_expected_mb": 413.0,
+    "mem_baseline_mb": 16.0,
+    "mem_after_a_mb": 261.0,
+    "mem_after_both_mb": 422.0,
+    "mem_peak_mb": 1192.0,
+    "mem_final_mb": 500.0,
+    "overhead_ratio": 2.9,
+    "train_time_s": 0.9,
+    "gen": "HelloIf you are using the latest Facebook Traffic"
+  },
+  {
+    "label": "355M+82M=437M",
+    "param_a_m": 355.0,
+    "param_b_m": 82.0,
+    "param_mem_expected_mb": 873.0,
+    "mem_baseline_mb": 16.0,
+    "mem_after_a_mb": 693.0,
+    "mem_after_both_mb": 857.0,
+    "mem_peak_mb": 1360.0,
+    "mem_final_mb": 961.0,
+    "overhead_ratio": 1.6,
+    "train_time_s": 1.0,
+    "gen": "Hello"
+  }
+]

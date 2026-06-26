@@ -42,8 +42,9 @@ Given models A and B with the same hidden dimension:
 1. Collect hidden state activations from both models on calibration data
 2. Compute cosine similarity between all layer pairs → proportional layer mapping
 3. Per-layer alpha blending: `W_merged[i] = alpha[i] * W_A[i] + (1-alpha[i]) * W_B[map(i)]`
-4. Multi-pass greedy search optimizes alphas (2 passes, ±0.25 per layer)
-5. Spectral repair: blend singular values of merged weights
+4. Pure-A baseline check (if blending degrades PPL, fall back to pure A)
+5. Multi-pass greedy search optimizes alphas (coarse ±0.25, fine ±0.1, ultra ±0.5/±0.05)
+6. Spectral repair: blend singular values of merged weights
 
 ⚠ Weight blending degrades badly when one parent has poor LM quality. The bridge approach is recommended for all scenarios.
 
@@ -84,7 +85,7 @@ Tested on NVIDIA RTX 3050 (4GB). PPL on WikiText-2 validation set (~1500 tokens)
 
 ✓ = coherent, close to better parent. ✓✓ = beats both parents.
 
-**Key insight**: The **bridge approach** (representation-level) consistently beats weight-blending. For same-arch same-size (S1), weight-blending gives PPL 11213 vs bridge PPL **60.2**. For same-arch diff-size (S2), the bridge beats **both** parents. MergeKit cannot handle any of these scenarios (requires identical arch + task-vector format).
+**Key insight**: The **bridge approach** (representation-level) consistently beats weight-blending (after weight-blend fixes: PPL ~173-220 vs bridge **60.2** for S1). For same-arch diff-size (S2), the bridge beats **both** parents. MergeKit cannot handle cross-arch or cross-size merging (requires identical arch + task-vector format).
 
 ## Installation
 
@@ -127,8 +128,11 @@ Uses WikiText-2 validation set (~3000+ tokens) for reliable PPL. Results saved t
 - **Bridge vs better parent**: The bridge beats the weaker parent but not the stronger one. Useful when you must use model A's tokenizer/vocabulary but want signal from model B.
 - **Bridge overfits small calibration sets**: With only 24-48 calibration texts, the bridge shows some overfitting. More calibration data would improve generalization.
 - **Weight blending is not recommended**: The bridge approach consistently beats weight-blending in all scenarios tested. Weight-blend is kept for comparison only.
-- **Architecture support**: Currently only tested on GPT-2 family for the primary model. OPT and SmolLM2 are bridge targets only.
-- **4GB GPU limit**: All operations fit within 4GB VRAM with float16 and max sequence length 64, 24 calibration texts.
+- **Architecture support**: Now architecture-agnostic — supports GPT-2, Llama (SmolLM2), OPT, and any HuggingFace-compatible CausalLM. Architecture detection uses `model.config.model_type` with dynamic layer/head resolution. Tested on GPT-2 (124M), DistilGPT-2 (82M), OPT-125M, SmolLM2-135M.
+- **Memory (measured peak)**: ~1.08 GB for 164M params, ~1.19 GB for 206M params, ~1.36 GB for 437M params (RTX 3050 4GB, float16, max_len=64). Projected ~45-80 GB for 7B models — requires multi-GPU.
+- **Bridge bypasses ln_f**: The final layer norm is not included in the bridge; fixing this would require retraining all bridge weights from scratch. This limits output quality ceiling.
+- **PPL ≠ generation quality**: The bridge beats parents on PPL but generations are often worse than parent A in practice. PPL improvement is necessary but not sufficient for better text.
+- **7B+ scaling**: Bridge requires backprop through the full model — each training step is as expensive as a forward+backward pass. Gradient checkpointing + multi-GPU required for models >1B.
 
 ## API reference
 

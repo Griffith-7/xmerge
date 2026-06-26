@@ -1,0 +1,94 @@
+{
+  "results": [
+    {
+      "seed": 0,
+      "n_calib": 4,
+      "ppl": 51.3,
+      "gen": "The future of AI is in the wings of AI."
+    },
+    {
+      "seed": 0,
+      "n_calib": 16,
+      "ppl": 48.9,
+      "gen": "The future of AI is more than computers and artificial intel"
+    },
+    {
+      "seed": 0,
+      "n_calib": 48,
+      "ppl": 48.4,
+      "gen": "The future of AI is currently in the hands of the company th"
+    },
+    {
+      "seed": 1,
+      "n_calib": 4,
+      "ppl": 56.3,
+      "gen": "The future of AI is currently largely unknown, but given the"
+    },
+    {
+      "seed": 1,
+      "n_calib": 16,
+      "ppl": 48.0,
+      "gen": "The future of AI is the future of the aerospace industry."
+    },
+    {
+      "seed": 1,
+      "n_calib": 48,
+      "ppl": 47.8,
+      "gen": "The future of AI is far from settled - the international com"
+    },
+    {
+      "seed": 2,
+      "n_calib": 4,
+      "ppl": 53.0,
+      "gen": "The future of AI is a wide one \u2013 but in the end there are se"
+    },
+    {
+      "seed": 2,
+      "n_calib": 16,
+      "ppl": 49.2,
+      "gen": "The future of AI is already in your hands if you are interes"
+    },
+    {
+      "seed": 2,
+      "n_calib": 48,
+      "ppl": 48.0,
+      "gen": "The future of AI is one of Silicon Valley's biggest mysterie"
+    },
+    {
+      "seed": 3,
+      "n_calib": 4,
+      "ppl": 54.3,
+      "gen": "The future of AI is much brighter than the sun."
+    },
+    {
+      "seed": 3,
+      "n_calib": 16,
+      "ppl": 48.8,
+      "gen": "The future of AI is in the hands of researchers from a multi"
+    },
+    {
+      "seed": 3,
+      "n_calib": 48,
+      "ppl": 49.3,
+      "gen": "The future of AI is as bright as cloud computing."
+    },
+    {
+      "seed": 4,
+      "n_calib": 4,
+      "ppl": 50.7,
+      "gen": "The future of AI is unclear, but growing concerns about the "
+    },
+    {
+      "seed": 4,
+      "n_calib": 16,
+      "ppl": 48.7,
+      "gen": "The future of AI is uncertain as we see more advances in Art"
+    },
+    {
+      "seed": 4,
+      "n_calib": 48,
+      "ppl": 49.2,
+      "gen": "The future of AI is unclear."
+    }
+  ]
+}
