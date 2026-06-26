@@ -1,5 +1,5 @@
 """
-fusellm vs mergekit: Honest benchmark. Uses WikiText-2 validation set (~3200+ tokens).
+xmerge vs mergekit: Honest benchmark. Uses WikiText-2 validation set (~3200+ tokens).
 """
 import os, sys, json, math, gc, warnings, time
 import torch, torch.nn as nn, torch.nn.functional as F
@@ -8,7 +8,7 @@ from datasets import load_dataset
 warnings.filterwarnings("ignore")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-from fusellm import merge_prod, utils
+from xmerge import merge_prod, utils
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.float16
@@ -92,7 +92,7 @@ for scenario in range(1, 5):
         s["reference_dialogpt"] = {"ppl": round(compute_ppl(mb, tok, EVAL_TEXTS), 1)}
         print(f"  GPT-2 PPL: {s['reference_gpt2']['ppl']}, DialoGPT PPL: {s['reference_dialogpt']['ppl']}")
         s["mergekit"] = {"note": "MergeKit requires identical architecture. GPT-2 and DialoGPT share architecture, but MergeKit uses weight-space methods (TIES/DARE/SLERP) designed for task-vector merging, not base-model merging."}
-        print("  fusellm bridge (representation-level, recommended)...")
+        print("  xmerge bridge (representation-level, recommended)...")
         t0 = time.time()
         bridge = merge_prod.train_bridge_v2(ma, mb, tok, CALIB_TEXTS, steps=20)
         total_loss, total_tokens = 0.0, 0
@@ -106,18 +106,18 @@ for scenario in range(1, 5):
         pp = math.exp(total_loss / total_tokens)
         gen = merge_prod.stitch_generate(ma, mb, bridge, tok, "The future of artificial intelligence is")
         gib = detect_gibberish(gen)
-        s["fusellm_bridge"] = {"ppl": round(pp, 1), "time": round(time.time() - t0, 1), "generation": gen, "gibberish": gib}
+        s["xmerge_bridge"] = {"ppl": round(pp, 1), "time": round(time.time() - t0, 1), "generation": gen, "gibberish": gib}
         print(f"    Bridge PPL: {pp:.1f}, gibberish: {gib}, gen: {gen[:70]}...")
         del bridge; clean()
 
-        print("  fusellm CKA+spectral (weight-blend, for comparison)...")
+        print("  xmerge CKA+spectral (weight-blend, for comparison)...")
         ma2 = AutoModelForCausalLM.from_pretrained("gpt2", torch_dtype=DTYPE).to(DEVICE).eval()
         mb2 = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-small", torch_dtype=DTYPE).to(DEVICE).eval()
         tok2 = AutoTokenizer.from_pretrained("gpt2"); tok2.pad_token = tok2.eos_token
         t0 = time.time()
         merged, _ = merge_prod.merge_same_arch(ma2, mb2, calib_texts=CALIB_TEXTS, save_name=None)
         pp2 = compute_ppl(merged, tok2, EVAL_TEXTS)
-        s["fusellm_weight_blend"] = {"ppl": round(pp2, 1), "time": round(time.time() - t0, 1)}
+        s["xmerge_weight_blend"] = {"ppl": round(pp2, 1), "time": round(time.time() - t0, 1)}
         print(f"    Weight-blend PPL: {pp2:.1f}")
         del ma2, mb2, merged, tok2; clean()
         del ma, mb, tok; clean()
@@ -133,7 +133,7 @@ for scenario in range(1, 5):
         s["reference_distilgpt2"] = {"ppl": round(compute_ppl(mb, tok, EVAL_TEXTS), 1)}
         print(f"  GPT-2 PPL: {s['reference_gpt2']['ppl']}, DistilGPT-2 PPL: {s['reference_distilgpt2']['ppl']}")
         s["mergekit"] = {"note": "Unsupported: different parameter sizes. MergeKit requires identical model dimensions."}
-        print("  fusellm bridge (representation-level, recommended for diff sizes)...")
+        print("  xmerge bridge (representation-level, recommended for diff sizes)...")
         t0 = time.time()
         bridge, _ = merge_prod.merge_same_arch_bridge(ma, mb, tok, CALIB_TEXTS, steps=10, save_name=None)
         total_loss, total_tokens = 0.0, 0
@@ -147,7 +147,7 @@ for scenario in range(1, 5):
         pp = math.exp(total_loss / total_tokens)
         gen = merge_prod.stitch_generate(ma, mb, bridge, tok, "The future of artificial intelligence is")
         gib = detect_gibberish(gen)
-        s["fusellm_bridge"] = {"ppl": round(pp, 1), "time": round(time.time() - t0, 1), "generation": gen, "gibberish": gib}
+        s["xmerge_bridge"] = {"ppl": round(pp, 1), "time": round(time.time() - t0, 1), "generation": gen, "gibberish": gib}
         print(f"    PPL: {pp:.1f}, gibberish: {gib}, gen: {gen[:70]}...")
         del ma, mb, bridge; clean()
         results["S2: Same arch, diff size"] = s
@@ -163,7 +163,7 @@ for scenario in range(1, 5):
         s["reference_opt125m"] = {"ppl": round(compute_ppl(mb, tok_opt, EVAL_TEXTS), 1)}
         print(f"  DistilGPT-2 PPL: {s['reference_distilgpt2']['ppl']}, OPT-125M PPL: {s['reference_opt125m']['ppl']}")
         s["mergekit"] = {"note": "Unsupported: different architectures (GPT-2 vs OPT). MergeKit requires identical model architectures."}
-        print("  fusellm bridge + 20-step training...")
+        print("  xmerge bridge + 20-step training...")
         t0 = time.time()
         bridge = merge_prod.train_bridge_v2(ma, mb, tok, CALIB_TEXTS, steps=20)
         total_loss, total_tokens = 0.0, 0
@@ -177,7 +177,7 @@ for scenario in range(1, 5):
         pp = math.exp(total_loss / total_tokens)
         gen = merge_prod.stitch_generate(ma, mb, bridge, tok, "The future of artificial intelligence is")
         gib = detect_gibberish(gen)
-        s["fusellm_bridge"] = {"ppl": round(pp, 1), "time": round(time.time() - t0, 1), "generation": gen, "gibberish": gib}
+        s["xmerge_bridge"] = {"ppl": round(pp, 1), "time": round(time.time() - t0, 1), "generation": gen, "gibberish": gib}
         print(f"    PPL: {pp:.1f}, gibberish: {gib}, gen: {gen[:70]}...")
         del ma, mb, bridge; clean()
         results["S3: Diff arch, same size"] = s
@@ -196,7 +196,7 @@ for scenario in range(1, 5):
         match_rate = sum(1 for v in tm.values() if v > 0) / len(tm) * 100
         print(f"  Token map: {len(tm)} entries, match: {match_rate:.0f}%")
         s["mergekit"] = {"note": "Unsupported: different architectures AND different sizes. MergeKit cannot handle either."}
-        print("  fusellm cross-arch cross-tokenizer bridge (20 steps)...")
+        print("  xmerge cross-arch cross-tokenizer bridge (20 steps)...")
         t0 = time.time()
         bridge = merge_prod.merge_diff_arch(ma, mb, calib_texts=CALIB_TEXTS, token_map=tm,
                                             save_name="s4_benchmark", tok=tok_a,
@@ -212,7 +212,7 @@ for scenario in range(1, 5):
         pp = math.exp(total_loss / total_tokens)
         gen = merge_prod.stitch_generate(ma, mb, bridge, tok_a, "The future of artificial intelligence is", token_map=tm)
         gib = detect_gibberish(gen)
-        s["fusellm_bridge"] = {"ppl": round(pp, 1), "time": round(time.time() - t0, 1), "generation": gen, "gibberish": gib}
+        s["xmerge_bridge"] = {"ppl": round(pp, 1), "time": round(time.time() - t0, 1), "generation": gen, "gibberish": gib}
         print(f"    PPL: {pp:.1f}, gibberish: {gib}, gen: {gen[:70]}...")
         del ma, mb, bridge; clean()
         results["S4: Diff arch, diff size"] = s

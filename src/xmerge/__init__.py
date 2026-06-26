@@ -1,5 +1,5 @@
 """
-fusellm: Merge LLMs of different architectures and sizes WITHOUT full training.
+xmerge: Merge LLMs of different architectures and sizes WITHOUT full training.
 
 Canonical API (merge_prod):
   merge_same_arch         — Activation-similarity-guided weight-blend merge for same-architecture models (returns model, tokenizer)
@@ -19,9 +19,9 @@ Utilities (utils):
   build_token_map    — Map token IDs from tokenizer A to tokenizer B
 
 CLI:
-  fusellm merge --config config.json   — Run a merge from config file
-  fusellm eval --bridge-dir path       — Evaluate a saved bridge
-  fusellm list                         — List saved merges
-  fusellm clean                        — Clear GPU memory cache
+  xmerge merge --config config.json   — Run a merge from config file
+  xmerge eval --bridge-dir path       — Evaluate a saved bridge
+  xmerge list                         — List saved merges
+  xmerge clean                        — Clear GPU memory cache
 """
 from . import merge_prod, utils

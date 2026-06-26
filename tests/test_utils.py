@@ -1,6 +1,6 @@
 import pytest, torch, math, gc, sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
-from fusellm import utils
+from xmerge import utils
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 

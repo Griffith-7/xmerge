@@ -1,4 +1,4 @@
-"""fusellm CLI — merge, eval, serve, and manage model merges."""
+"""xmerge CLI — merge, eval, serve, and manage model merges."""
 
 import argparse, json, math, os, sys, time
 from pathlib import Path
@@ -36,7 +36,7 @@ def cmd_merge(args):
     weight_decay = train_cfg.get("weight_decay", 0.01)
     use_cached = train_cfg.get("use_cached", True)
 
-    print(f"[fusellm] Loading models: {cfg['model_a']} + {cfg['model_b']}")
+    print(f"[xmerge] Loading models: {cfg['model_a']} + {cfg['model_b']}")
     t0 = time.time()
     ma = AutoModelForCausalLM.from_pretrained(cfg["model_a"], torch_dtype=DTYPE).to(DEVICE).eval()
     mb = AutoModelForCausalLM.from_pretrained(cfg["model_b"], torch_dtype=DTYPE).to(DEVICE).eval()
@@ -45,7 +45,7 @@ def cmd_merge(args):
         tok.pad_token = tok.eos_token
     print(f"  Loaded in {time.time() - t0:.1f}s")
 
-    print(f"[fusellm] Loading calibration texts ({n_texts})...")
+    print(f"[xmerge] Loading calibration texts ({n_texts})...")
     calib_texts = merge_prod.load_texts(n_texts)
 
     os.makedirs(SAVE_DIR, exist_ok=True)
@@ -60,14 +60,14 @@ def cmd_merge(args):
     }
 
     if method == "weight_blend":
-        print(f"[fusellm] Running weight-blend merge...")
+        print(f"[xmerge] Running weight-blend merge...")
         merged, _ = merge_prod.merge_same_arch(ma, mb, calib_texts, save_name=merge_name)
         enc = tok(calib_texts[:16], truncation=True, padding=True, max_length=64, return_tensors="pt")
         ids, mask = enc.input_ids.to(DEVICE), enc.attention_mask.to(DEVICE)
         metrics["final_ppl"] = round(merge_prod.ppl(merged, ids, mask), 1)
 
     elif method == "bridge":
-        print(f"[fusellm] {'Cached' if use_cached else 'Standard'} bridge training ({steps} steps)...")
+        print(f"[xmerge] {'Cached' if use_cached else 'Standard'} bridge training ({steps} steps)...")
 
         tok_b = AutoTokenizer.from_pretrained(cfg.get("tokenizer_b", cfg["model_b"]))
         if tok_b.pad_token is None:
@@ -104,8 +104,8 @@ def cmd_merge(args):
     # Save merge metrics
     metrics_path = os.path.join(save_path, "metrics.json")
     _save_json(metrics_path, metrics)
-    print(f"[fusellm] Metrics saved to {metrics_path}")
-    print(f"[fusellm] Done in {time.time() - t0:.1f}s")
+    print(f"[xmerge] Metrics saved to {metrics_path}")
+    print(f"[xmerge] Done in {time.time() - t0:.1f}s")
 
 
 def cmd_eval(args):
@@ -114,7 +114,7 @@ def cmd_eval(args):
         sys.exit(1)
 
     info = _load_json(os.path.join(args.bridge_dir, "bridge_config.json"))
-    print(f"[fusellm] Loading bridge from {args.bridge_dir}")
+    print(f"[xmerge] Loading bridge from {args.bridge_dir}")
     print(f"  Model A: {info['model_a']}")
     print(f"  Model B: {info['model_b']}")
 
@@ -198,13 +198,13 @@ def cmd_list(args):
 
 
 def cmd_clean(args):
-    print(f"[fusellm] Cleaning GPU memory...")
+    print(f"[xmerge] Cleaning GPU memory...")
     merge_prod.clean()
     print(f"  [OK]")
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="fusellm", description="Merge LLMs across architectures and sizes")
+    parser = argparse.ArgumentParser(prog="xmerge", description="Merge LLMs across architectures and sizes")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_merge = sub.add_parser("merge", help="Run a merge from config file")

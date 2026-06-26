@@ -1,6 +1,6 @@
 import pytest, torch, gc, math, sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
-from fusellm import merge_prod, utils
+from xmerge import merge_prod, utils
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 skip_slow = pytest.mark.skipif(not torch.cuda.is_available(), reason="requires GPU")

@@ -9,13 +9,13 @@
     "mergekit": {
       "note": "MergeKit requires identical architecture. GPT-2 and DialoGPT share architecture, but MergeKit uses weight-space methods (TIES/DARE/SLERP) designed for task-vector merging, not base-model merging."
     },
-    "fusellm_bridge": {
+    "xmerge_bridge": {
       "ppl": 60.2,
       "time": 27.0,
       "generation": "The future of artificial intelligence is disruptive to conventional economy and mass media strategies and is causing a proliferation of \"madmen who can only do one job at a time,\" Citizen said",
       "gibberish": false
     },
-    "fusellm_weight_blend": {
+    "xmerge_weight_blend": {
       "ppl": 383.1,
       "time": 64.6
     }
@@ -30,7 +30,7 @@
     "mergekit": {
       "note": "Unsupported: different parameter sizes. MergeKit requires identical model dimensions."
     },
-    "fusellm_bridge": {
+    "xmerge_bridge": {
       "ppl": 47.6,
       "time": 10.1,
       "generation": "The future of artificial intelligence is in your hands.\"",
@@ -47,7 +47,7 @@
     "mergekit": {
       "note": "Unsupported: different architectures (GPT-2 vs OPT). MergeKit requires identical model architectures."
     },
-    "fusellm_bridge": {
+    "xmerge_bridge": {
       "ppl": 66.4,
       "time": 16.7,
       "generation": "The future of artificial intelligence is going to be an extremely difficult time with technology which can be found in the 21st century , or as one might call it , although there is no",
@@ -64,7 +64,7 @@
     "mergekit": {
       "note": "Unsupported: different architectures AND different sizes. MergeKit cannot handle either."
     },
-    "fusellm_bridge": {
+    "xmerge_bridge": {
       "ppl": 70.9,
       "time": 10.0,
       "generation": "The future of artificial intelligence is in the future \u2013 at least in the first half of 2017 \u2013 but the future of artificial intelligence should include both of the three main fields \u2013 traditional people",

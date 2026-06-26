@@ -3,7 +3,7 @@ requires = ["setuptools>=64.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "fusellm"
+name = "xmerge"
 version = "0.1.0"
 description = "Merge LLMs of different architectures and sizes — representation-level merging, not weight-space interpolation"
 readme = "README.md"
@@ -18,7 +18,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-urls = {Homepage = "https://github.com/anomalyco/fusellm", Source = "https://github.com/anomalyco/fusellm"}
+urls = {Homepage = "https://github.com/Griffith-7/xmerge", Source = "https://github.com/Griffith-7/xmerge"}
 dependencies = [
     "torch>=2.0.0",
     "transformers>=4.30.0",
@@ -30,10 +30,10 @@ dev = ["pytest>=7.0.0"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-packages = ["fusellm"]
+packages = ["xmerge"]
 
 [project.scripts]
-fusellm = "fusellm.cli:main"
+xmerge = "xmerge.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

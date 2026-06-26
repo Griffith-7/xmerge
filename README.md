@@ -1,33 +1,33 @@
 <div align="center">
 
-# fusellm
+# xmerge
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-red.svg)](https://pytorch.org)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/Griffith-7/fusellm/pulls)
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Griffith-7/fusellm/blob/main/demo.ipynb)
-[![pip install](https://img.shields.io/badge/install-pip%20install%20-e--success)](https://github.com/Griffith-7/fusellm)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/Griffith-7/xmerge/pulls)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Griffith-7/xmerge/blob/main/demo.ipynb)
+[![pip install](https://img.shields.io/badge/install-pip%20install%20-e--success)](https://github.com/Griffith-7/xmerge)
 
 **Merge LLMs across different architectures and sizes** — representation-level merging, not weight-space interpolation.
 
 </div>
 
 ```bash
-pip install git+https://github.com/Griffith-7/fusellm.git
+pip install git+https://github.com/Griffith-7/xmerge.git
 ```
 
 ```python
-from fusellm import merge_prod
+from xmerge import merge_prod
 bridge = merge_prod.train_bridge_cached(model_a, model_b, tok, texts, steps=20)
 print(merge_prod.stitch_generate(model_a, model_b, bridge, tok, "The future of AI is"))
 ```
 
 ---
 
-## What makes fusellm different
+## What makes xmerge different
 
-| Capability | mergekit | fusellm |
+| Capability | mergekit | xmerge |
 |---|---|---|
 | Merge different model sizes (e.g. GPT-2 124M + DistilGPT-2 82M) | ❌ | ✅ **PPL 47.6** — beats both |
 | Merge different architectures (e.g. GPT-2 + OPT) | ❌ | ✅ **PPL 66.4** |
@@ -53,7 +53,7 @@ Model B ────────────▶│  Transformer Layers  │─�
 
 ## Try it
 
-Run the [Colab Notebook](https://colab.research.google.com/github/Griffith-7/fusellm/blob/main/demo.ipynb) — no GPU required (Colab provides one).
+Run the [Colab Notebook](https://colab.research.google.com/github/Griffith-7/xmerge/blob/main/demo.ipynb) — no GPU required (Colab provides one).
 
 ## Example outputs
 
@@ -68,7 +68,7 @@ Run the [Colab Notebook](https://colab.research.google.com/github/Griffith-7/fus
 
 PPL on WikiText-2 validation (~1500 tokens). Lower is better.
 
-| Scenario | Parent A | Parent B | **fusellm** |
+| Scenario | Parent A | Parent B | **xmerge** |
 |---|---|---|---|
 | GPT-2 + DialoGPT (same arch, same size) | 51.9 | 5721.4 | **60.2** ✓ |
 | GPT-2 + DistilGPT-2 (same arch, diff size) | 51.9 | 80.5 | **47.6** ✓✓ |
@@ -100,18 +100,18 @@ text = merge_prod.generate_bridge(model_a, model_b, bridge, tok, "Your prompt", 
 ## CLI
 
 ```bash
-fusellm merge --config config.json   # Run a merge
-fusellm eval --bridge-dir path       # Evaluate + generate
-fusellm list                         # List saved merges
+xmerge merge --config config.json   # Run a merge
+xmerge eval --bridge-dir path       # Evaluate + generate
+xmerge list                         # List saved merges
 ```
 
 ## Install
 
 ```bash
-pip install git+https://github.com/Griffith-7/fusellm.git
+pip install git+https://github.com/Griffith-7/xmerge.git
 # Or locally:
-git clone https://github.com/Griffith-7/fusellm.git
-cd fusellm && pip install -e .
+git clone https://github.com/Griffith-7/xmerge.git
+cd xmerge && pip install -e .
 ```
 
 Requirements: Python 3.10+, PyTorch 2.0+, transformers 4.30+
