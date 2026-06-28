@@ -107,18 +107,15 @@ Streaming moves 1 transformer layer to GPU at a time — mathematically identica
 | GPT-2 Large + Medium | "The meaning of life is" | *"now a reality and you can now understand what life inside your dreams."* |
 | Mistral-7B + SmolLM2-360M | "General relativity" | *"describes gravity as the curvature of spacetime..."* |
 
-### All 4 streaming approaches compared
+### Streamed bridge performance
 
-| Approach | PPL | Time | Verdict |
+| Method | PPL | Time | Notes |
 |---|---|---|---|
-| 1 — Weight blend (CKA + alpha) | 5612.8 | 54s | ❌ Baseline only — SVD projection destroys info for different sizes |
-| 2 — Bridge v2 (streamed fwd) | 1.2 | 186s | ✅ Works but slow — full backprop through both models each step |
-| 3 — **Bridge cached (recommended)** | **1.2** | **18s** | **✅✅ Best — cache hidden states once, train bridge on GPU** |
-| 4 — Full pipeline (cache + train + save + gen) | 1.2 | 21s | ✅ Same as 3 + save + generate in one call |
+| Bridge v2 (streamed fwd each step) | 1.2 | 186s | Full backprop through both models |
+| **Bridge cached (recommended)** | **1.2** | **18s** | **Cache once, train on GPU — 10x faster** |
+| Full pipeline (cache + train + save + gen) | 1.2 | 21s | End-to-end in one call |
 
-Tested on GPT-2 Medium (355M) + DistilGPT-2 (82M). **Approach 3 is the sweet spot** — same PPL as 2, 10x faster.
-
-> ⚠️ **Weight blend (Approach 1)** PPL 5612.8 is real, not a bug. When models have different dimensions, B's weights must be SVD-projected to match A's shape, which corrupts them. This is why mergekit also cannot merge different-sized models. **Use the bridge (Approaches 2-4) instead** — it works at the representation level, not the weight level.
+Tested on GPT-2 Medium (355M) + DistilGPT-2 (82M). All methods produce identical PPL — the cached version is just faster.
 
 ## API
 
