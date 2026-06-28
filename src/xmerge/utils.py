@@ -4,7 +4,7 @@ import torch, gc, math, numpy as np
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 __all__ = [
-    "svd_project", "proportional_map", "hidden_dim", "num_layers",
+    "svd_project", "svd_project_activation_aware", "proportional_map", "hidden_dim", "num_layers",
     "compute_ppl", "generate_text", "load_calibration", "build_token_map",
     "clean",
 ]
@@ -25,6 +25,34 @@ def svd_project(W, out_t, in_t):
     k = min(m, n, out_t, in_t)
     W2 = torch.zeros(out_t, in_t, dtype=W.dtype, device=W.device)
     reconstructed = U[:, :k] @ torch.diag(S[:k]) @ Vh[:k]
+    W2[:min(m, out_t), :min(n, in_t)] = reconstructed[:min(m, out_t), :min(n, in_t)]
+    return W2
+
+
+def svd_project_activation_aware(W, out_t, in_t, activations):
+    """SVD projection weighted by activation importance.
+
+    W: [d_out, d_in] weight matrix
+    activations: [n_samples, d_in] — inputs to this layer from calibration data.
+    Uses activation statistics to select which singular directions to keep,
+    preserving the directions most important for the actual data distribution.
+    """
+    if W.shape == (out_t, in_t):
+        return W
+    W = W.float()
+    U, S, Vh = torch.linalg.svd(W, full_matrices=False)
+    m, n = U.shape[0], Vh.shape[1]
+    k_full = min(m, n)
+    max_k = min(m, n, out_t, in_t)
+
+    with torch.no_grad():
+        proj = activations.float() @ Vh[:k_full].T
+        importance = proj.norm(dim=0)
+
+    top_idx = importance.topk(max_k).indices.sort().values
+
+    W2 = torch.zeros(out_t, in_t, dtype=W.dtype, device=W.device)
+    reconstructed = U[:, top_idx] @ torch.diag(S[top_idx]) @ Vh[top_idx]
     W2[:min(m, out_t), :min(n, in_t)] = reconstructed[:min(m, out_t), :min(n, in_t)]
     return W2
 

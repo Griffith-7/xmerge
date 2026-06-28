@@ -21,7 +21,7 @@ from datasets import load_dataset
 warnings.filterwarnings("ignore")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-from fusellm import merge_prod, utils
+from xmerge import merge_prod, utils
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.float16

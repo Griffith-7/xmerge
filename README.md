@@ -52,10 +52,11 @@ Model A ────────────▶│  Transformer Layers  │─�
                      ┌─────────────────────┐          │
 Model B ────────────▶│  Transformer Layers  │──▶ h_B ──┘
                      └─────────────────────┘
-                              │
-                         W: d_A × d_B
-                         zero-initialized
-                         20-step AdamW
+                      │
+                          W: d_A × d_B
+                          (linear or MLP+GELU)
+                          zero-initialized
+                          20-step AdamW
 ```
 
 ## Memory scaling
@@ -83,6 +84,8 @@ Streaming moves 1 transformer layer to GPU at a time — mathematically identica
 | **Mistral-7B + SmolLM2-360M (diff arch, diff size)** | **38.3** | — | **10.0** ✓✓ | ❌ |
 
 ✓ = coherent, near better parent. ✓✓ = beats both parents.
+
+> **MLP bridge** (`bridge_type="mlp"`) improves PPL by ~15% over linear bridge — e.g. DistilGPT-2→GPT-2 drops from 4.6→3.9, beating both parents.
 
 <div align="center">
   <img src="benchmarks/benchmark_chart.png" alt="xmerge benchmarks vs parents" width="90%"/>
@@ -123,6 +126,7 @@ Tested on GPT-2 Medium (355M) + DistilGPT-2 (82M). All methods produce identical
 
 ```python
 bridge = merge_prod.train_bridge_v2(model_a, model_b, tok, texts, steps=20)
+bridge = merge_prod.train_bridge_v2(model_a, model_b, tok, texts, bridge_type="mlp", steps=20)  # ~15% better PPL
 bridge = merge_prod.train_bridge_cached(model_a, model_b, tok, texts, steps=20)  # 100x faster
 merged_model, _ = merge_prod.merge_same_arch(model_a, model_b, calib_texts)
 text = merge_prod.stitch_generate(model_a, model_b, bridge, tok, "Your prompt")
@@ -141,9 +145,11 @@ hidden = stream(input_ids)
 # Memory-efficient model loading
 model, tok = merge_stream.load_model_streamed("mistralai/Mistral-7B-v0.1")
 
-# Streamed bridge training
+# Streamed bridge training (linear or MLP)
 bridge, ppl = merge_stream.streamed_train_bridge_cached(ma, mb, tok, texts)
+bridge, ppl = merge_stream.streamed_train_bridge_cached(ma, mb, tok, texts, bridge_type="mlp")
 bridge, ppl = merge_stream.streamed_train_bridge_v2(ma, mb, tok, texts)
+bridge, ppl = merge_stream.streamed_train_bridge_v2(ma, mb, tok, texts, bridge_type="mlp")
 
 # Streamed weight blend
 merged, tok, ppl, alphas = merge_stream.streamed_merge_same_arch(ma, mb, calib_texts)
@@ -177,7 +183,7 @@ Tested on NVIDIA RTX 3050 (4GB).
 
 ## How it works
 
-1. **Zero-initialized bridge** — a learned linear projection W that maps h_B → h_A space, initialized to zero so the merge starts as a pure model A
+1. **Zero-initialized bridge** — a learned projection W that maps h_B → h_A space (linear by default, or MLP with residual + GELU for ~15% better PPL)
 2. **20-step fine-tune** — AdamW + cosine LR on <50 calibration texts (~45 seconds on GPU, ~10 seconds cached)
 3. **Streaming** — layers moved to GPU one at a time, enabling 7B models on 4GB VRAM with identical math
 4. **Generation** — stitch (pure bridge) or blend (bridge + residual from model A)
@@ -186,6 +192,7 @@ Tested on NVIDIA RTX 3050 (4GB).
 
 - Works best comparing model A's hidden states to model B's — no tokenizer alignment needed
 - Bridge beats the weaker parent on PPL consistently
+- MLP bridge (`bridge_type="mlp"`) adds a residual + GELU nonlinearity for ~15% better PPL at minimal compute cost
 - For same-architecture + same-size: weight blending is faster but bridge gives better PPL
 - The streaming module (`merge_stream`) is mathematically identical to full-GPU — we verified 0.0 max diff
 - Merges 7B-scale models in ~2 minutes on a single 4GB RTX 3050

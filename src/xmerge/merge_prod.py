@@ -25,7 +25,7 @@ from datasets import load_dataset
 from . import utils
 
 __all__ = [
-    "OptimalBridge", "CkaComputer", "activation_similarity",
+    "OptimalBridge", "MLPBridge", "CkaComputer", "activation_similarity",
     "merge_same_arch", "merge_same_arch_bridge", "build_bridge",
     "train_bridge_v2", "train_bridge_cached",
     "merge_diff_arch", "generate_bridge", "stitch_generate",
@@ -83,43 +83,50 @@ def _get_lm_head(model):
         return model.embed_out
     if hasattr(model, 'output_projection'):
         return model.output_projection
-    for name, mod in model.named_modules():
-        if 'lm_head' in name.lower() or 'embed_out' in name.lower():
-            if isinstance(mod, nn.Linear):
-                return mod
+
+def _get_final_norm(model):
+    mt = getattr(model.config, 'model_type', '').lower()
+    if mt == 'gpt2' and hasattr(model.transformer, 'ln_f'):
+        return model.transformer.ln_f
+    if mt in ('llama', 'mistral', 'qwen2', 'phi', 'phi3', 'gemma', 'smollm2', 'cohere'):
+        if hasattr(model.model, 'norm'):
+            return model.model.norm
+    if mt == 'opt' and hasattr(model.model.decoder, 'final_layer_norm'):
+        return model.model.decoder.final_layer_norm
+    if hasattr(model, 'transformer') and hasattr(model.transformer, 'ln_f'):
+        return model.transformer.ln_f
+    if hasattr(model, 'model') and hasattr(model.model, 'norm'):
+        return model.model.norm
+    if hasattr(model, 'model') and hasattr(model.model, 'final_layer_norm'):
+        return model.model.final_layer_norm
     return None
 
 
-# ─── HELPERS ───────────────────────────────────────────────────────────────
+# ─── UTILITIES ───────────────────────────────────────────────────────────
 
 def load_texts(n=64):
-    ds = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
-    texts = [t["text"] for t in ds if len(t["text"].strip()) > 50][:n*2]
-    return texts[:n] or ["The quick brown fox jumps over the lazy dog."] * n
+    try:
+        ds = load_dataset("wikitext", "wikitext-2-raw-v1", split="validation", trust_remote_code=True)
+        return [t["text"].strip() for t in ds if len(t["text"].strip()) > 10][:n]
+    except Exception:
+        return ["The quick brown fox jumps over the lazy dog."] * max(n, 4)
 
-@torch.no_grad()
 def ppl(model, ids, mask=None):
-    return math.exp(model(input_ids=ids, attention_mask=mask, labels=ids).loss.item())
+    model.eval()
+    if mask is None: mask = (ids > 0).long()
+    loss = model(input_ids=ids, attention_mask=mask, labels=ids).loss
+    return math.exp(loss.item())
 
 def clean():
     gc.collect()
     if DEVICE == "cuda": torch.cuda.empty_cache()
 
-def _get_final_norm(model):
-    if hasattr(model, 'transformer') and hasattr(model.transformer, 'ln_f'):
-        return model.transformer.ln_f
-    if hasattr(model, 'model') and hasattr(model.model, 'norm'):
-        return model.model.norm
-    if hasattr(model, 'model') and hasattr(model.model, 'decoder') and hasattr(model.model.decoder, 'final_layer_norm'):
-        return model.model.decoder.final_layer_norm
-    if hasattr(model, 'model') and hasattr(model.model, 'decoder') and hasattr(model.model.decoder, 'norm'):
-        return model.model.decoder.norm
-    if hasattr(model, 'base_model') and hasattr(model.base_model, 'norm'):
-        return model.base_model.norm
-    return None
+proportional_map = utils.proportional_map
+svd_project = utils.svd_project
+build_token_map = utils.build_token_map
 
-def proportional_map(n_a, n_b):
-    return {i: min(int((i + 0.5) * n_b / n_a), n_b - 1) for i in range(n_a)}
+
+# ─── SVD PROJECT (keep local reference) ─────────────────────────────────
 
 def svd_project(W, out_t, in_t):
     if W.shape == (out_t, in_t): return W
@@ -143,6 +150,25 @@ def build_token_map(tok_a, tok_b):
 # SOLUTION 1 — Activation-similarity-guided merge (same arch, diff sizes)
 # ═══════════════════════════════════════════════════════════════════════════
 
+def hsic_cka(h_a, h_b):
+    """Proper HSIC Centered Kernel Alignment.
+    h_a, h_b: [batch*seq, d_a], [batch*seq, d_b] — the hidden states.
+    Returns scalar similarity in [0, 1].
+    """
+    m = h_a.shape[0]
+    K = h_a @ h_a.T
+    L = h_b @ h_b.T
+    H = torch.eye(m, device=h_a.device) - torch.ones(m, m, device=h_a.device) / m
+    K_c = H @ K @ H
+    L_c = H @ L @ H
+    hsic = (K_c * L_c).sum()
+    var_k = (K_c * K_c).sum()
+    var_l = (L_c * L_c).sum()
+    if var_k < 1e-10 or var_l < 1e-10:
+        return torch.tensor(0.0, device=h_a.device)
+    return (hsic / (var_k * var_l).sqrt()).clamp(min=0.0, max=1.0)
+
+
 class CkaComputer:
     def __init__(self, model, n_layers):
         self.hiddens = {}
@@ -155,7 +181,8 @@ class CkaComputer:
 
     def _hook(self, i):
         def fn(_, inp, out):
-            self.hiddens[i] = (out[0] if isinstance(out, tuple) else out).float().reshape(-1).cpu()
+            h = (out[0] if isinstance(out, tuple) else out).float()
+            self.hiddens[i] = h.cpu()
         return fn
 
     def collect(self, model, ids, mask):
@@ -167,13 +194,83 @@ class CkaComputer:
         for h in self.handles: h.remove()
 
 
-def activation_similarity(x, y):
-    x = x - x.mean(); y = y - y.mean()
-    xx = x @ x; yy = y @ y; xy = x @ y
-    return xy / (xx * yy).sqrt().clamp(min=1e-10)
+def activation_similarity(h_a, h_b):
+    """CKA between two hidden states from different models.
+    h_a, h_b: [batch, seq, d_a], [batch, seq, d_b] or [*, d].
+    Reshapes to 2D and computes HSIC CKA.
+    """
+    ha_2d = h_a.reshape(-1, h_a.shape[-1])
+    hb_2d = h_b.reshape(-1, h_b.shape[-1])
+    min_n = min(ha_2d.shape[0], hb_2d.shape[0])
+    return hsic_cka(ha_2d[:min_n], hb_2d[:min_n])
 
 
-def merge_same_arch(model_a, model_b, calib_texts=None, save_name="merged_same_arch"):
+def _compute_procrustes_rotation(model_a, model_b, mapping, ha, hb):
+    """Compute orthogonal rotation R aligning B's representation space to A's.
+
+    Uses hidden states (activations) with Tikhonov regularization to handle
+    rank-deficiency when the number of tokens < hidden dimension.
+    """
+    last_a = max(ha.keys()) if ha else None
+    last_b = max(hb.keys()) if hb else None
+    if last_a is None or last_b is None:
+        return None
+
+    h_a = ha[last_a].float().reshape(-1, ha[last_a].shape[-1])
+    h_b = hb[last_b].float().reshape(-1, hb[last_b].shape[-1])
+
+    d_h = h_a.shape[1]
+    if h_b.shape[1] != d_h:
+        return None
+
+    C = h_b.T @ h_a
+    trace_C = torch.trace(C).abs().item()
+    lambda_reg = max(1e-4 * trace_C / d_h, 1e-6)
+    C_reg = C + lambda_reg * torch.eye(d_h, device=C.device)
+
+    U, _, Vt = torch.linalg.svd(C_reg, full_matrices=False)
+    R = U @ Vt
+    if torch.det(R) < 0:
+        Vt[-1] *= -1
+        R = U @ Vt
+    return R
+
+
+def _apply_procrustes_alignment(model_a, model_b, mapping, b_proj, ha, hb):
+    """Align B's weights to A's coordinate system via orthogonal Procrustes.
+
+    Computes rotation R from hidden states (with Tikhonov regularization),
+    then rotates all B weight matrices to match A's coordinate system.
+    """
+    d_h = utils.hidden_dim(model_a.config)
+    R = _compute_procrustes_rotation(model_a, model_b, mapping, ha, hb)
+    if R is None:
+        return b_proj
+
+    aligned = {}
+    for key, w in b_proj.items():
+        if isinstance(key, tuple):
+            w_f = w.float()
+            if w_f.dim() == 2:
+                d0, d1 = w_f.shape
+                R_dev = R.to(w_f.device, dtype=torch.float32)
+                if d0 == d_h and d1 == d_h:
+                    aligned[key] = (R_dev @ w_f @ R_dev.T).to(w.dtype)
+                elif d1 == d_h:
+                    aligned[key] = (w_f @ R_dev.T).to(w.dtype)
+                elif d0 == d_h:
+                    aligned[key] = (R_dev @ w_f).to(w.dtype)
+                else:
+                    aligned[key] = w
+            else:
+                aligned[key] = w
+        else:
+            aligned[key] = w
+
+    return aligned
+
+
+def merge_same_arch(model_a, model_b, calib_texts=None, save_name="merged_same_arch", use_procrustes=False):
     tok = AutoTokenizer.from_pretrained(model_a.config._name_or_path if hasattr(model_a.config, '_name_or_path') else "gpt2")
     tok.pad_token = tok.eos_token
     if calib_texts is None: calib_texts = load_texts(32)
@@ -213,12 +310,16 @@ def merge_same_arch(model_a, model_b, calib_texts=None, save_name="merged_same_a
     avg_sim = np.mean(list(sim_vals.values()))
     print(f"  Avg similarity: {avg_sim:.3f}")
 
+    print("  Aligning representations via orthogonal Procrustes..." if use_procrustes else "  Projecting B weights...")
+    b_proj = _project_b_weights(model_a, model_b, mapping)
+    if use_procrustes:
+        b_proj = _apply_procrustes_alignment(model_a, model_b, mapping, b_proj, ha, hb)
+
     alphas = {}
     for i in range(n_a):
         c = sim_vals.get(i, 0.5)
         alphas[i] = max(0.3, min(0.9, 0.8 - 0.4 * c))
 
-    b_proj = _project_b_weights(model_a, model_b, mapping)
     merged_sd = _apply_merge(model_a, model_b, mapping, alphas, b_proj)
 
     m = AutoModelForCausalLM.from_config(model_a.config).to(DEVICE)
@@ -226,7 +327,6 @@ def merge_same_arch(model_a, model_b, calib_texts=None, save_name="merged_same_a
     best_ppl = ppl(m, ids, mask)
     best_alphas = dict(alphas)
 
-    # Check pure A baseline — if blending a bad parent only makes things worse
     ppl_pure_a = ppl(model_a, ids, mask)
     print(f"  Init PPL: {best_ppl:.1f} | Pure-A PPL: {ppl_pure_a:.1f} | Refining...")
     if ppl_pure_a < best_ppl:
@@ -300,7 +400,14 @@ def _project_b_weights(model_a, model_b, mapping):
             bk = f"{prefix_b}{i_b}.{local}"
             if bk in sd_b:
                 w_b = sd_b[bk].float()
-                proj[(i_a, local)] = w_b if w_a.shape == w_b.shape else svd_project(w_b, *w_a.shape)
+                if w_a.shape == w_b.shape:
+                    proj[(i_a, local)] = w_b
+                elif w_a.dim() == 2:
+                    proj[(i_a, local)] = svd_project(w_b, *w_a.shape)
+                elif w_a.dim() == 1:
+                    proj[(i_a, local)] = F.interpolate(
+                        w_b.view(1, 1, -1), size=w_a.shape[0], mode='linear'
+                    ).view(-1)
     for k in sd_a:
         if not k.startswith(prefix_a) and k in sd_b:
             if sd_a[k].shape == sd_b[k].shape:
@@ -318,27 +425,18 @@ def _is_embed_or_output_key(key):
 def _apply_merge(model_a, model_b, mapping, alphas, b_proj):
     prefix = _get_layer_prefix(model_a)
     sd_a = model_a.state_dict()
-    sd = {}
+    sd = {k: v.clone() for k, v in sd_a.items()}
     for k, v in sd_a.items():
-        if _is_embed_or_output_key(k):
-            sd[k] = v.clone()
-        elif k.startswith(prefix):
-            sd[k] = v.clone()
-        elif k in b_proj:
-            avg_alpha = sum(alphas.values()) / max(len(alphas), 1)
-            sd[k] = (avg_alpha * v.float() + (1 - avg_alpha) * b_proj[k])
-        else:
-            sd[k] = v.clone()
-    for k in sd_a:
         if k.startswith(prefix):
             rest = k[len(prefix):]
             parts = rest.split(".")
             i_a = int(parts[0])
-            local = ".".join(parts[1:])
-            a = alphas.get(i_a, 0.5)
-            key = (i_a, local)
-            if key in b_proj:
-                sd[k] = (a * sd_a[k].float() + (1 - a) * b_proj[key])
+            if i_a in mapping:
+                a = alphas.get(i_a, 0.5)
+                local = ".".join(parts[1:])
+                key = (i_a, local)
+                if key in b_proj:
+                    sd[k] = (a * v.float() + (1 - a) * b_proj[key]).to(v.dtype)
     return sd
 
 
@@ -355,9 +453,33 @@ class OptimalBridge(nn.Module):
         return h_a + self.proj(h_b)
 
 
-def build_bridge(ma, mb, tok, texts, token_map=None):
+class MLPBridge(nn.Module):
+    """Non-linear residual bridge for cross-architecture merging.
+    Adds a small MLP on top of the linear projection for more capacity.
+    All output paths zero-init so bridge starts as identity (h_a unchanged).
+    """
+    def __init__(self, d_a, d_b, hidden_dim=None):
+        super().__init__()
+        hidden_dim = hidden_dim or min(d_a, 256)
+        self.linear = nn.Linear(d_b, d_a, bias=False)
+        self.mlp = nn.Sequential(
+            nn.Linear(d_b, hidden_dim, bias=False),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, d_a, bias=False),
+        )
+        nn.init.zeros_(self.linear.weight)
+        nn.init.zeros_(self.mlp[-1].weight)
+
+    def forward(self, h_a, h_b):
+        return h_a + self.linear(h_b) + self.mlp(h_b)
+
+
+def build_bridge(ma, mb, tok, texts, token_map=None, bridge_type="linear"):
     d_a, d_b = utils.hidden_dim(ma.config), utils.hidden_dim(mb.config)
-    bridge = OptimalBridge(d_a, d_b)
+    if bridge_type == "mlp":
+        bridge = MLPBridge(d_a, d_b)
+    else:
+        bridge = OptimalBridge(d_a, d_b)
     return bridge.to(DEVICE)
 
 
@@ -377,12 +499,43 @@ def _stitch_forward(ma, mb, bridge, ids, mask, labels, dtype, token_map=None):
     return loss, logits
 
 
-def train_bridge_v2(ma, mb, tok, texts, token_map=None, steps=10, lr=3e-4, weight_decay=0.01, max_len=128):
+def _holdout_split(texts, eval_pct=0.2):
+    n = len(texts)
+    n_eval = max(min(int(n * eval_pct), n // 2), min(4, n // 2))
+    if n_eval < 1:
+        return texts, []
+    return texts[:-n_eval], texts[-n_eval:]
+
+
+def _eval_bridge_ppl(ma, mb, bridge, tok, eval_texts, token_map=None, max_len=128):
+    if not eval_texts:
+        return float("inf")
+    dtype = next(ma.parameters()).dtype
+    enc = tok(eval_texts, truncation=True, padding=True, max_length=max_len, return_tensors="pt")
+    ids, mask = enc.input_ids.to(DEVICE), enc.attention_mask.to(DEVICE)
+    loss, _ = _stitch_forward(ma, mb, bridge, ids, mask, ids, dtype, token_map)
+    return math.exp(loss.item())
+
+
+def train_bridge_v2(ma, mb, tok, texts, token_map=None, steps=10, lr=3e-4,
+                    weight_decay=0.01, max_len=128, eval_texts=None,
+                    bridge_type="linear"):
     d_a, d_b = utils.hidden_dim(ma.config), utils.hidden_dim(mb.config)
-    bridge = OptimalBridge(d_a, d_b)
+    if bridge_type == "mlp":
+        bridge = MLPBridge(d_a, d_b)
+    else:
+        bridge = OptimalBridge(d_a, d_b)
     bridge.to(DEVICE)
 
-    enc = tok(texts, truncation=True, padding=True, max_length=max_len, return_tensors="pt")
+    if eval_texts is not None:
+        train_texts = texts
+    else:
+        train_texts, eval_texts = texts, None
+
+    if not train_texts:
+        train_texts = texts
+
+    enc = tok(train_texts, truncation=True, padding=True, max_length=max_len, return_tensors="pt")
     ids, mask = enc.input_ids.to(DEVICE), enc.attention_mask.to(DEVICE)
 
     opt = torch.optim.AdamW(bridge.parameters(), lr=lr, weight_decay=weight_decay)
@@ -408,11 +561,17 @@ def train_bridge_v2(ma, mb, tok, texts, token_map=None, steps=10, lr=3e-4, weigh
     bridge.load_state_dict(best if best else bridge.state_dict())
     bridge.eval()
     torch.set_grad_enabled(False)
+
+    eval_ppl = _eval_bridge_ppl(ma, mb, bridge, tok, eval_texts, token_map, max_len)
+    if math.isfinite(eval_ppl):
+        print(f"    Eval PPL (held-out): {eval_ppl:.1f}")
+    else:
+        print(f"    (no held-out eval texts)")
+    bridge.eval_ppl = eval_ppl
     return bridge
 
 
 def _cache_hidden_states(ma, mb, tok, texts, token_map=None, max_len=128):
-    """Cache pre-ln_f hidden states from both models on calibration data."""
     lm_head = _get_lm_head(ma)
     assert lm_head is not None
     enc = tok(texts, truncation=True, padding=True, max_length=max_len, return_tensors="pt")
@@ -438,24 +597,27 @@ def _cache_hidden_states(ma, mb, tok, texts, token_map=None, max_len=128):
 
 
 def train_bridge_cached(ma, mb, tok, texts, token_map=None, steps=20, lr=3e-4,
-                         weight_decay=0.01, max_len=128):
-    """Train bridge using cached hidden states (100x faster).
+                         weight_decay=0.01, max_len=128, eval_texts=None,
+                         bridge_type="linear"):
+    if eval_texts is not None:
+        train_texts = texts
+    else:
+        train_texts, eval_texts = texts, None
+    if not train_texts:
+        train_texts = texts
 
-    Caches the final hidden states (pre-ln_f) from both models, then trains
-    only the bridge + lm_head — no backprop through transformers per step.
-    Produces identical results to train_bridge_v2 since caching is exact
-    (model weights don't change during bridge training).
-    """
     d_a, d_b = utils.hidden_dim(ma.config), utils.hidden_dim(mb.config)
-    bridge = OptimalBridge(d_a, d_b).to(DEVICE)
-    cache = _cache_hidden_states(ma, mb, tok, texts, token_map, max_len)
+    if bridge_type == "mlp":
+        bridge = MLPBridge(d_a, d_b).to(DEVICE)
+    else:
+        bridge = OptimalBridge(d_a, d_b).to(DEVICE)
+    cache = _cache_hidden_states(ma, mb, tok, train_texts, token_map, max_len)
     ha, hb, ids = cache["ha"], cache["hb"], cache["ids"]
     lm_head, dtype = cache["lm_head"], cache["dtype"]
 
     opt = torch.optim.AdamW(bridge.parameters(), lr=lr, weight_decay=weight_decay)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=steps)
-    best = None
-    best_loss = float("inf")
+    best = None; best_loss = float("inf")
 
     torch.set_grad_enabled(True)
     bridge.train()
@@ -479,23 +641,26 @@ def train_bridge_cached(ma, mb, tok, texts, token_map=None, steps=20, lr=3e-4,
     bridge.load_state_dict(best if best else bridge.state_dict())
     bridge.eval()
     torch.set_grad_enabled(False)
+
+    eval_ppl = _eval_bridge_ppl(ma, mb, bridge, tok, eval_texts, token_map, max_len)
+    if math.isfinite(eval_ppl):
+        print(f"    Eval PPL (held-out): {eval_ppl:.1f}")
+    else:
+        print(f"    (no held-out eval texts)")
+    bridge.eval_ppl = eval_ppl
     return bridge
 
 
-def merge_same_arch_bridge(model_a, model_b, tok, calib_texts, steps=10, lr=3e-4, save_name=None):
+def merge_same_arch_bridge(model_a, model_b, tok, calib_texts, steps=10, lr=3e-4, save_name=None, bridge_type="linear"):
     n_a = _get_n_layers(model_a.config)
     n_b = _get_n_layers(model_b.config)
     print(f"  Same-arch bridge: {n_a} layers (A) + {n_b} layers (B), {steps} steps")
 
-    bridge = train_bridge_v2(model_a, model_b, tok, calib_texts, steps=steps, lr=lr)
+    bridge = train_bridge_v2(model_a, model_b, tok, calib_texts, steps=steps, lr=lr, bridge_type=bridge_type)
 
-    enc = tok(calib_texts[:16], truncation=True, padding=True, max_length=64, return_tensors="pt")
-    ids = enc.input_ids.to(DEVICE)
-    mask = enc.attention_mask.to(DEVICE)
-    dtype = next(model_a.parameters()).dtype
-    loss, _ = _stitch_forward(model_a, model_b, bridge, ids, mask, ids, dtype)
-    ppl_val = math.exp(loss.item())
-    print(f"  Bridge PPL: {ppl_val:.1f}")
+    ppl_val = getattr(bridge, "eval_ppl", float("inf"))
+    if math.isfinite(ppl_val):
+        print(f"  Bridge PPL: {ppl_val:.1f}")
 
     if save_name is not None:
         save_dir = os.path.join(SAVE_DIR, save_name)
@@ -524,8 +689,9 @@ def stitch_generate(ma, mb, bridge, tok, prompt, max_new=30, token_map=None):
         ha, hb = oa.hidden_states[-1].float(), ob.hidden_states[-1].float()
         k = min(ha.shape[1], hb.shape[1])
         hf = bridge(ha[:, :k], hb[:, :k])
+        dtype = next(ma.parameters()).dtype
         lm_head = _get_lm_head(ma)
-        logits = lm_head(hf.to(dtype=next(ma.parameters()).dtype))[:, -1, :] / 0.8
+        logits = lm_head(hf.to(dtype))[:, -1, :] / 0.8
         ids = torch.cat([ids, torch.multinomial(F.softmax(logits, dim=-1), 1)], dim=-1)
     return tok.decode(ids[0], skip_special_tokens=True)
 
@@ -544,8 +710,9 @@ def generate_bridge(model_a, model_b, bridge, tok, prompt, max_new=50,
         k = min(ha.shape[1], hb.shape[1])
         h_bridge = bridge(ha[:, :k], hb[:, :k])
         hf = ha[:, :k] + mix_alpha * (h_bridge - ha[:, :k])
+        dtype = next(model_a.parameters()).dtype
         lm_head = _get_lm_head(model_a)
-        logits = lm_head(hf.to(dtype=next(model_a.parameters()).dtype))[:, -1, :] / temp
+        logits = lm_head(hf.to(dtype))[:, -1, :] / temp
         probs = F.softmax(logits, dim=-1)
         ids = torch.cat([ids, torch.multinomial(probs, 1)], dim=-1)
 
@@ -554,7 +721,8 @@ def generate_bridge(model_a, model_b, bridge, tok, prompt, max_new=50,
 
 def merge_diff_arch(model_a, model_b, calib_texts=None, token_map=None,
                     save_name="merged_diff_arch", tok=None,
-                    steps=10, lr=3e-4, weight_decay=0.01, max_len=128):
+                    steps=10, lr=3e-4, weight_decay=0.01, max_len=128,
+                    bridge_type="linear"):
     if tok is None:
         tok = AutoTokenizer.from_pretrained(
             model_a.config._name_or_path if hasattr(model_a.config, '_name_or_path') else "distilgpt2"
@@ -571,7 +739,8 @@ def merge_diff_arch(model_a, model_b, calib_texts=None, token_map=None,
     print(f"  Training bridge ({steps} steps, lr={lr:.0e}, wd={weight_decay})...")
     bridge = train_bridge_v2(model_a, model_b, tok, calib_texts,
                              token_map=token_map, steps=steps, lr=lr,
-                             weight_decay=weight_decay, max_len=max_len)
+                             weight_decay=weight_decay, max_len=max_len,
+                             bridge_type=bridge_type)
 
     dtype = next(model_a.parameters()).dtype
     with torch.no_grad():
@@ -592,148 +761,47 @@ def merge_diff_arch(model_a, model_b, calib_texts=None, token_map=None,
     bridge_dir = os.path.join(SAVE_DIR, save_name)
     os.makedirs(bridge_dir, exist_ok=True)
     torch.save(bridge.state_dict(), os.path.join(bridge_dir, "bridge.pt"))
-    config = {
-        "d_a": utils.hidden_dim(model_a.config), "d_b": utils.hidden_dim(model_b.config),
-        "model_a": model_a.config._name_or_path if hasattr(model_a.config, '_name_or_path') else "distilgpt2",
-        "model_b": model_b.config._name_or_path if hasattr(model_b.config, '_name_or_path') else "unknown",
-        "ppl_a": round(pp_a, 1), "ppl_bridge": round(b_ppl, 1),
-        "type": "diff_arch_trained_bridge",
-        "steps": steps, "lr": lr, "weight_decay": weight_decay,
-        "has_token_map": token_map is not None,
-        "generation_mix_alpha": 0.3,
-    }
-    with open(os.path.join(bridge_dir, "bridge_config.json"), "w") as f:
-        json.dump(config, f, indent=2)
     tok.save_pretrained(bridge_dir)
+    with open(os.path.join(bridge_dir, "bridge_config.json"), "w") as f:
+        json.dump({
+            "d_a": utils.hidden_dim(model_a.config),
+            "d_b": utils.hidden_dim(model_b.config),
+            "model_a": model_a.config._name_or_path if hasattr(model_a.config, '_name_or_path') else "unknown",
+            "model_b": model_b.config._name_or_path if hasattr(model_b.config, '_name_or_path') else "unknown",
+            "ppl_a": round(pp_a, 1),
+            "ppl_bridge": round(b_ppl, 1),
+            "type": "diff_arch_bridge",
+            "steps": steps, "lr": lr, "bridge_type": bridge_type,
+        }, f, indent=2)
     print(f"  [OK] Saved to {bridge_dir}/")
-
+    clean()
     return bridge
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# LOADING
-# ═══════════════════════════════════════════════════════════════════════════
+# ─── EVALUATION ──────────────────────────────────────────────────────────
 
-def load_merged(save_name):
-    """Load a previously saved merged model or bridge.
+def verify_generations(ma, mb, bridge, tok, prompts=None, token_map=None):
+    if prompts is None:
+        prompts = ["The future of AI is", "In the beginning,"]
+    for p in prompts:
+        g = stitch_generate(ma, mb, bridge, tok, p, token_map=token_map)
+        print(f"  [{p}] -> {g[:100]}")
 
-    For same-arch merges: returns (model, tokenizer, config_dict)
-    For diff-arch bridges: returns (bridge, tokenizer, config_dict)
-    """
-    save_dir = os.path.join(SAVE_DIR, save_name)
-    if not os.path.exists(save_dir):
-        raise FileNotFoundError(f"Saved model not found at {save_dir}")
-
-    if os.path.exists(os.path.join(save_dir, "merge_info.json")):
-        # Same-arch merge
-        with open(os.path.join(save_dir, "merge_info.json")) as f:
-            info = json.load(f)
-        model = AutoModelForCausalLM.from_pretrained(save_dir, torch_dtype=DTYPE).to(DEVICE).eval()
-        tok = AutoTokenizer.from_pretrained(save_dir)
-        return model, tok, info
-
-    if os.path.exists(os.path.join(save_dir, "bridge_config.json")):
-        # Diff-arch bridge
-        with open(os.path.join(save_dir, "bridge_config.json")) as f:
-            info = json.load(f)
-        bridge = OptimalBridge(info["d_a"], info["d_b"])  # zero init
-        state = torch.load(os.path.join(save_dir, "bridge.pt"), map_location=DEVICE, weights_only=True)
-        bridge.load_state_dict(state)
-        bridge.to(DEVICE).eval()
-        tok = AutoTokenizer.from_pretrained(save_dir)
-        return bridge, tok, info
-
-    raise ValueError(f"Unknown format in {save_dir}")
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# VERIFICATION
-# ═══════════════════════════════════════════════════════════════════════════
-
-EVAL_PROMPTS = [
-    "The future of artificial intelligence is",
-    "In the beginning, there was",
-    "The meaning of life is",
-    "Once upon a time in a",
-    "The most important thing to remember is",
-]
-
-def verify_generations(model_or_bridge, model_a, model_b, tok, token_map=None, tag=""):
-    print(f"\n  {'='*50}")
-    print(f"  Generation samples {tag}")
-    print(f"  {'='*50}")
-    for prompt in EVAL_PROMPTS:
-        try:
-            if isinstance(model_or_bridge, nn.Module) and hasattr(model_or_bridge, 'proj'):
-                text = generate_bridge(model_a, model_b, model_or_bridge, tok, prompt,
-                                       token_map=token_map)
-            else:
-                inp = tok(prompt, return_tensors="pt").to(DEVICE)
-                out = model_or_bridge.generate(**inp, max_new_tokens=50, do_sample=True,
-                                                temperature=0.8, top_p=0.9, top_k=40,
-                                                repetition_penalty=1.1,
-                                                pad_token_id=tok.pad_token_id or tok.eos_token_id)
-                text = tok.decode(out[0], skip_special_tokens=True)
-            print(f"  [{prompt}]\n    -> {text}\n")
-        except Exception as e:
-            print(f"  [{prompt}]\n    -> FAILED: {e}\n")
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# MAIN
-# ═══════════════════════════════════════════════════════════════════════════
-
-if __name__ == "__main__":
-    import sys
-
-    print(f"Device: {DEVICE}  |  Running on {torch.cuda.get_device_name(0) if DEVICE == 'cuda' else 'CPU'}")
-    run_sol = sys.argv[1] if len(sys.argv) > 1 else "3"
-
-    if run_sol in ("1", "3"):
-        print("\n" + "="*65)
-        print("  SOLUTION 1: Same architecture, different sizes")
-        print("  Method: Activation-similarity-guided merge (zero training)")
-        print("="*65)
-
-        ma = AutoModelForCausalLM.from_pretrained("gpt2", torch_dtype=DTYPE).to(DEVICE).eval()
-        mb = AutoModelForCausalLM.from_pretrained("distilgpt2", torch_dtype=DTYPE).to(DEVICE).eval()
-        tok = AutoTokenizer.from_pretrained("gpt2"); tok.pad_token = tok.eos_token
-
-        merged, _ = merge_same_arch(ma, mb, save_name="gpt2_distilgpt2_merged")
-        verify_generations(merged, None, None, tok, tag="(Sol 1: GPT-2 + DistilGPT-2)")
-
-        del ma, mb, merged; clean()
-
-    if run_sol in ("2", "3"):
-        print("\n" + "="*65)
-        print("  SOLUTION 2: Different architectures (LS bridge, zero training)")
-        print("="*65)
-
-        print("\n  ── Test A: DistilGPT-2 + OPT-125M (same tokenizer) ──")
-        ma = AutoModelForCausalLM.from_pretrained("distilgpt2", torch_dtype=DTYPE).to(DEVICE).eval()
-        mb = AutoModelForCausalLM.from_pretrained("facebook/opt-125m", torch_dtype=DTYPE, use_safetensors=True).to(DEVICE).eval()
-        tok = AutoTokenizer.from_pretrained("distilgpt2"); tok.pad_token = tok.eos_token
-
-        bridge_a = merge_diff_arch(ma, mb, save_name="distilgpt2_opt125m_bridge")
-        verify_generations(bridge_a, ma, mb, tok, tag="(Sol 2a: GPT-2 + OPT)")
-        del bridge_a; clean()
-
-        print("\n  ── Test B: DistilGPT-2 + SmolLM2-135M (cross-tokenizer) ──")
-        mb2 = AutoModelForCausalLM.from_pretrained("HuggingFaceTB/SmolLM2-135M", torch_dtype=DTYPE).to(DEVICE).eval()
-        tok2 = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM2-135M")
-        if tok2.pad_token is None: tok2.pad_token = tok2.eos_token
-
-        print("  Building token map...")
-        token_map = build_token_map(tok, tok2)
-        match_rate = sum(1 for v in token_map.values() if v > 0) / len(token_map) * 100
-        print(f"  Token match rate: {match_rate:.1f}%")
-
-        bridge_b = merge_diff_arch(ma, mb2, token_map=token_map,
-                                   save_name="distilgpt2_smollm2_bridge")
-        verify_generations(bridge_b, ma, mb2, tok, token_map=token_map,
-                          tag="(Sol 2b: GPT-2 + SmolLM2)")
-        del ma, mb, mb2, bridge_b; clean()
-
-    print("\n" + "="*65)
-    print("  [OK] All merges complete. Models saved to 'merged_models/'")
-    print("="*65)
+def load_merged(bridge_dir, model_a, model_b, tok=None):
+    d_a = utils.hidden_dim(model_a.config)
+    d_b = utils.hidden_dim(model_b.config)
+    config_path = os.path.join(bridge_dir, "bridge_config.json")
+    bridge_type = "linear"
+    if os.path.exists(config_path):
+        with open(config_path) as f:
+            cfg = json.load(f)
+            bridge_type = cfg.get("bridge_type", "linear")
+    if bridge_type == "mlp":
+        bridge = MLPBridge(d_a, d_b).to(DEVICE)
+    else:
+        bridge = OptimalBridge(d_a, d_b).to(DEVICE)
+    bridge.load_state_dict(torch.load(os.path.join(bridge_dir, "bridge.pt"), map_location=DEVICE))
+    bridge.eval()
+    if tok is None:
+        tok = AutoTokenizer.from_pretrained(bridge_dir)
+    return bridge, tok

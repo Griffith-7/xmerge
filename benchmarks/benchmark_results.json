@@ -11,13 +11,13 @@
     },
     "xmerge_bridge": {
       "ppl": 60.2,
-      "time": 27.0,
-      "generation": "The future of artificial intelligence is disruptive to conventional economy and mass media strategies and is causing a proliferation of \"madmen who can only do one job at a time,\" Citizen said",
+      "time": 24.6,
+      "generation": "The future of artificial intelligence is uncertain as well as uncertain because of the strong competition that exists in the academic service and the fluctuations in prices and frequency of services and services by the various",
       "gibberish": false
     },
     "xmerge_weight_blend": {
-      "ppl": 383.1,
-      "time": 64.6
+      "ppl": 146.2,
+      "time": 196.1
     }
   },
   "S2: Same arch, diff size": {
@@ -32,8 +32,8 @@
     },
     "xmerge_bridge": {
       "ppl": 47.6,
-      "time": 10.1,
-      "generation": "The future of artificial intelligence is in your hands.\"",
+      "time": 9.6,
+      "generation": "The future of artificial intelligence is uncertain.Our outside experts are extremely helpful for",
       "gibberish": false
     }
   },
@@ -49,23 +49,9 @@
     },
     "xmerge_bridge": {
       "ppl": 66.4,
-      "time": 16.7,
-      "generation": "The future of artificial intelligence is going to be an extremely difficult time with technology which can be found in the 21st century , or as one might call it , although there is no",
+      "time": 26.2,
+      "generation": "The future of artificial intelligence is not the future , and the third-generation engines of artificial intelligence are going to be sorely",
       "gibberish": false
-    }
-  },
-  "S5: Mistral-7B + SmolLM2-360M (diff arch, diff size, streamed)": {
-    "reference_mistral7b": {
-      "ppl": 38.3
-    },
-    "mergekit": {
-      "note": "Unsupported: different architectures AND different sizes. Also requires >24GB VRAM for 7B models."
-    },
-    "xmerge_bridge_streamed": {
-      "ppl": 10.0,
-      "time": 240.0,
-      "vram": "4GB RTX 3050",
-      "note": "Beats Mistral-7B baseline by 3.8x. Layer-by-layer streaming enabled merging a 7B model on 4GB VRAM."
     }
   },
   "S4: Diff arch, diff size": {
@@ -80,8 +66,8 @@
     },
     "xmerge_bridge": {
       "ppl": 70.9,
-      "time": 10.0,
-      "generation": "The future of artificial intelligence is in the future \u2013 at least in the first half of 2017 \u2013 but the future of artificial intelligence should include both of the three main fields \u2013 traditional people",
+      "time": 10.1,
+      "generation": "The future of artificial intelligence is uncertain and the second is uncertain because of the limited capabilities made by natural forces, and the potential for bigger or smaller ones for the future of artificial intelligence",
       "gibberish": false
     }
   }

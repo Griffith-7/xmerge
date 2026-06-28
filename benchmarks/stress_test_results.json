@@ -1,60 +1,60 @@
 {
   "test1_repeatability_trial1": {
-    "ppl": 47.6,
-    "time_s": 74.9
+    "ppl": 734.0,
+    "time_s": 5.9
   },
   "test1_repeatability_trial2": {
-    "ppl": 47.6,
-    "time_s": 229.8
+    "ppl": 734.0,
+    "time_s": 5.9
   },
   "test2_zero_init": {
     "a_only_ppl": 79.4,
-    "untrained_bridge_ppl": 80.5,
-    "diff": 1.143
+    "untrained_bridge_ppl": 664.0,
+    "diff": 584.61
   },
   "test3_overfitting": {
-    "train_ppl": 1.1,
-    "eval_ppl": 168.9,
-    "generalization_gap": 167.9
+    "train_ppl": 15.4,
+    "eval_ppl": 487.3,
+    "generalization_gap": 472.0
   },
   "test4_ablation": {
-    "random_init_ppl": 32578712109.9,
-    "zero_init_ppl": 80.5,
-    "trained_ppl": 66.4
+    "random_init_ppl": 1901.0,
+    "zero_init_ppl": 664.0,
+    "trained_ppl": 536.6
   },
   "test5_generation_quality": [
     {
       "prompt": "The future of artificial intelligence is",
-      "parent_a_generation": "The future of artificial intelligence is bright \u2014 but it's in an uncertain place in the field of science.\n\nThe AI revolution is in its infancy. The idea is to create",
-      "merged_generation": "The future of artificial intelligence is certainly important.Follow @343rf\n"
+      "parent_a_generation": "The future of artificial intelligence is bright, and the technology that makes it possible to automate tasks could transform it into something far more powerful.\n\nThe future of artificial intelligence is bright",
+      "merged_generation": "The future of artificial intelligence is about the human and a world, Black CyThe New Formula 7 Solar Calculator\n\nThe first founded aboutAlso and Tz."
     },
     {
       "prompt": "In the beginning, there was",
-      "parent_a_generation": "In the beginning, there was no hope of a world without women.\n\n\"I think the future is going to be dominated by men, and that is one of the reasons",
-      "merged_generation": "In the beginning, there was no technology or technological development to be found to make a smartphone."
+      "parent_a_generation": "In the beginning, there was no good way to deal with this.\n\nThe idea was to get rid of all their money and take what they got. He said, \"",
+      "merged_generation": "In the beginning, there was profitable, psychologically cause r\n\n\n\n-\n\nEngland V. a.'s Alblu Oil was\n- good in's was returned value he"
     },
     {
       "prompt": "The meaning of life is",
-      "parent_a_generation": "The meaning of life is something that is in flux. Our understanding of it is, in essence, that of the whole.\n\nThe meaning of life is important. There",
-      "merged_generation": "The meaning of life is the beginning, and the end is chosen to be the end of it."
+      "parent_a_generation": "The meaning of life is not clear at this point.\n\nWhile the Bible provides the following list of things that are good for you, there is the possibility that some of",
+      "merged_generation": "The meaning of life is known men without poked have It. See, in *com\n.In Hu is De\u00ab the may Like. To only and as"
     },
     {
       "prompt": "Once upon a time in a",
-      "parent_a_generation": "Once upon a time in a very quiet place, and there were no children and children, the man became the father, and they became one.\n\nThe man said, \"",
-      "merged_generation": "Once upon a time in a notorious warzone, the sun rises at night and there are cries of \""
+      "parent_a_generation": "Once upon a time in a small cave, the three of them were fighting in battle. They were fighting with the other three who had arrived at the cave to fight the others,",
+      "merged_generation": "Once upon a time in a (TexOnly,\n45 A (P,\n.\n\n\n26 the page in removed\n\n- 15 events like from is his The after"
     },
     {
       "prompt": "The most important thing to remember is",
-      "parent_a_generation": "The most important thing to remember is your personal expectations when setting your goals. I'm not saying you should feel anything out of the ordinary, but for any given person, every day is",
-      "merged_generation": "The most important thing to remember is that it's too early to tell who will win."
+      "parent_a_generation": "The most important thing to remember is how you can build a character that will be different from your average character. It won't be a special character, but a character that will be more",
+      "merged_generation": "The most important thing to remember is let \"01idortalpia F:\nI mug maybe and abandoned sharp border fl. there too and pulled Kurdish the Bing Mak As M"
     }
   ],
   "test6_cross_eval": {
     "parent_a_ppl_custom": 36.8,
-    "bridge_ppl_custom": 46.0
+    "bridge_ppl_custom": 679.9
   },
   "test7_random_weights": {
-    "ppl": 58469.0,
+    "ppl": 57410.3,
     "is_garbage": true
   },
   "test8_batch_consistency": {
@@ -65,12 +65,12 @@
   },
   "test9_gradient_flow": {
     "weight_norm_before": 0.0,
-    "weight_norm_after": 1.594808,
+    "weight_norm_after": 1.894525,
     "weights_changed": true
   },
   "test10_memory": {
-    "memory_before_mb": 17.0,
+    "memory_before_mb": 16.0,
     "memory_after_mb": 500.0,
-    "peak_memory_mb": 9038.0
+    "peak_memory_mb": 7543.0
   }
 }

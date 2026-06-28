@@ -2,7 +2,7 @@
 import torch, math, gc, os, sys, json
 import torch.nn.functional as F
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-from fusellm import merge_prod, utils as futils
+from xmerge import merge_prod, utils as futils
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
 from datasets import load_dataset
 

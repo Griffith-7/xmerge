@@ -221,15 +221,15 @@ def load_one_model_at_a_time(model_name, dtype=torch.float16, cache_dir=None):
 # APPROACH 1 -- Weight blending (streamed CKA)
 # ===========================================================================
 
-def activation_similarity(x, y):
-    """CKA-style similarity. Handles different-length tensors by using min dims."""
-    x = x - x.mean(); y = y - y.mean()
-    # If different sizes, compare using the first min(d_a, d_b) features
-    if x.numel() != y.numel():
-        min_n = min(x.numel(), y.numel())
-        x = x[:min_n]; y = y[:min_n]
-    xx = x @ x; yy = y @ y; xy = x @ y
-    return xy / (xx * yy).sqrt().clamp(min=1e-10)
+def activation_similarity(h_a, h_b):
+    """CKA between two hidden states from different models.
+    h_a, h_b: [batch, seq, d_a], [batch, seq, d_b] or [*, d].
+    Reshapes to 2D and computes HSIC CKA.
+    """
+    ha_2d = h_a.reshape(-1, h_a.shape[-1])
+    hb_2d = h_b.reshape(-1, h_b.shape[-1])
+    min_n = min(ha_2d.shape[0], hb_2d.shape[0])
+    return merge_prod.hsic_cka(ha_2d[:min_n], hb_2d[:min_n])
 
 def compute_cka_streamed(model_a, model_b, input_ids, device="cuda"):
     """Compute CKA similarity matrix between two models via streaming."""
@@ -241,7 +241,7 @@ def compute_cka_streamed(model_a, model_b, input_ids, device="cuda"):
     def make_hook(store):
         def hook(idx):
             def fn(h):
-                store[idx] = h.float().reshape(-1)
+                store[idx] = h.float().cpu()
             return fn
         return hook
 
@@ -261,16 +261,18 @@ def compute_cka_streamed(model_a, model_b, input_ids, device="cuda"):
     sim = {}
     for i_a in range(n_a):
         for i_b in range(n_b):
-            sim[(i_a, i_b)] = activation_similarity(
-                hiddens_a.get(i_a, torch.zeros(1)),
-                hiddens_b.get(i_b, torch.zeros(1))
-            ).item()
+            ha = hiddens_a.get(i_a)
+            hb = hiddens_b.get(i_b)
+            if ha is None or hb is None:
+                sim[(i_a, i_b)] = 0.0
+            else:
+                sim[(i_a, i_b)] = activation_similarity(ha, hb).item()
 
     return sim, hiddens_a, hiddens_b
 
 
 def streamed_merge_improved(model_a, model_b, calib_texts=None,
-                            save_name=None, device="cuda"):
+                            save_name=None, device="cuda", use_procrustes=False):
     """Improved weight blending with interpolated layer mapping + alpha search."""
     print("="*60)
     print("  IMPROVED Weight Blending (interpolated layers + alpha search)")
@@ -365,6 +367,16 @@ def streamed_merge_improved(model_a, model_b, calib_texts=None,
 
     if skipped:
         print(f"  Skipped {len(skipped)} incompatible weights")
+
+    # Optionally apply Procrustes alignment
+    if use_procrustes and 'ha' in dir() and 'hb' in dir():
+        print("  Applying orthogonal Procrustes alignment...")
+        try:
+            b_proj = merge_prod._apply_procrustes_alignment(
+                model_a, model_b, mapping, b_proj, ha, hb
+            )
+        except Exception as e:
+            print(f"  Procrustes skipped: {e}")
 
     # Step 4: Optimize per-layer alpha
     # Try a few alpha values, pick the one that gives lowest loss on calibration
@@ -477,21 +489,74 @@ def _copy_lm_head(model, device):
     return copy_lh.to(device)
 
 
+def _holdout_split(texts, eval_pct=0.2):
+    n = len(texts)
+    n_eval = max(min(int(n * eval_pct), n // 2), min(4, n // 2))
+    if n_eval < 1:
+        return texts, []
+    return texts[:-n_eval], texts[-n_eval:]
+
+
+def _streamed_eval_ppl(model_a, model_b, bridge, tok, eval_texts, device, max_len=128, batch_size=2):
+    if not eval_texts:
+        return float("inf")
+    lm_head = _copy_lm_head(model_a, device)
+    if lm_head is None:
+        return float("inf")
+    model_dtype = next(model_a.parameters()).dtype
+    enc = tok(eval_texts, truncation=True, padding=True, max_length=max_len, return_tensors="pt")
+    ids = enc.input_ids
+    n = ids.shape[0]
+    total_loss = 0.0
+    with torch.no_grad():
+        for b in range(0, n, batch_size):
+            batch_ids = ids[b:b+batch_size]
+            ha = StreamedForward(model_a, device)(batch_ids)
+            hb = StreamedForward(model_b, device)(batch_ids)
+            k = min(ha.shape[1], hb.shape[1])
+            ha_gpu = ha[:, :k].float().to(device)
+            hb_gpu = hb[:, :k].float().to(device)
+            ids_gpu = batch_ids[:, :k].to(device)
+            hf = bridge(ha_gpu, hb_gpu)
+            logits = lm_head(hf.to(model_dtype))
+            sl, ll = logits[..., :-1, :].contiguous(), ids_gpu[..., 1:].contiguous()
+            loss = F.cross_entropy(sl.view(-1, sl.size(-1)), ll.view(-1), ignore_index=-100)
+            total_loss += loss.item()
+            del ha, hb, ha_gpu, hb_gpu, ids_gpu, hf, logits, sl, ll
+            clean()
+    lm_head.to("cpu")
+    avg = total_loss / max(1, (n + batch_size - 1) // batch_size)
+    return math.exp(avg)
+
+
 def streamed_train_bridge_v2(model_a, model_b, tok, texts, device="cuda",
                               steps=10, lr=3e-4, weight_decay=0.01, max_len=128,
-                              batch_size=2):
-    """Approach 2: Train bridge with streamed forward passes each gradient step."""
+                              batch_size=2, eval_texts=None, bridge_type="linear"):
+    """Approach 2: Train bridge with streamed forward passes each gradient step.
+
+    Reports held-out PPL from eval_texts when provided.
+    """
+    if eval_texts is not None:
+        train_texts = texts
+    else:
+        train_texts, eval_texts = texts, None
+    if not train_texts:
+        train_texts = texts
+
     print("="*60)
     print("  APPROACH 2: Bridge v2 (streamed forward each step)")
     print("="*60)
 
     d_a = utils.hidden_dim(model_a.config)
     d_b = utils.hidden_dim(model_b.config)
-    bridge = merge_prod.OptimalBridge(d_a, d_b).to(device)
+    if bridge_type == "mlp":
+        bridge = merge_prod.MLPBridge(d_a, d_b).to(device)
+    else:
+        bridge = merge_prod.OptimalBridge(d_a, d_b).to(device)
     lm_head = _copy_lm_head(model_a, device)
     model_dtype = next(model_a.parameters()).dtype
 
-    enc = tok(texts, truncation=True, padding=True, max_length=max_len, return_tensors="pt")
+    enc = tok(train_texts, truncation=True, padding=True, max_length=max_len, return_tensors="pt")
     ids, mask = enc.input_ids, enc.attention_mask
 
     opt = torch.optim.AdamW(bridge.parameters(), lr=lr, weight_decay=weight_decay)
@@ -541,11 +606,17 @@ def streamed_train_bridge_v2(model_a, model_b, tok, texts, device="cuda",
     bridge.load_state_dict(best if best else bridge.state_dict())
     bridge.eval()
     torch.set_grad_enabled(False)
-    ppl_val = math.exp(best_loss)
-    print(f"  Final PPL: {ppl_val:.1f}")
+
+    eval_ppl = _streamed_eval_ppl(model_a, model_b, bridge, tok, eval_texts, device, max_len, batch_size)
+    if math.isfinite(eval_ppl):
+        print(f"    Eval PPL (held-out): {eval_ppl:.1f}")
+    else:
+        print(f"    (no held-out eval texts)")
+    bridge.eval_ppl = eval_ppl
+
     lm_head.to("cpu")
     clean()
-    return bridge, ppl_val
+    return bridge, eval_ppl
 
 
 # ===========================================================================
@@ -554,18 +625,32 @@ def streamed_train_bridge_v2(model_a, model_b, tok, texts, device="cuda",
 
 def streamed_train_bridge_cached(model_a, model_b, tok, texts, device="cuda",
                                   steps=20, lr=3e-4, weight_decay=0.01,
-                                  max_len=128, batch_size=2):
-    """Approach 3: Cache hidden states via streaming ONCE, train bridge purely on GPU."""
+                                  max_len=128, batch_size=2, eval_texts=None,
+                                  bridge_type="linear"):
+    """Approach 3: Cache hidden states via streaming ONCE, train bridge purely on GPU.
+
+    Reports held-out PPL from eval_texts when provided.
+    """
+    if eval_texts is not None:
+        train_texts = texts
+    else:
+        train_texts, eval_texts = texts, None
+    if not train_texts:
+        train_texts = texts
+
     print("="*60)
     print("  APPROACH 3: Bridge Cached (stream cache once, GPU train)")
     print("="*60)
 
     d_a = utils.hidden_dim(model_a.config)
     d_b = utils.hidden_dim(model_b.config)
-    bridge = merge_prod.OptimalBridge(d_a, d_b).to(device)
+    if bridge_type == "mlp":
+        bridge = merge_prod.MLPBridge(d_a, d_b).to(device)
+    else:
+        bridge = merge_prod.OptimalBridge(d_a, d_b).to(device)
 
     print("  Caching hidden states (stream both models)...")
-    enc = tok(texts, truncation=True, padding=True, max_length=max_len, return_tensors="pt")
+    enc = tok(train_texts, truncation=True, padding=True, max_length=max_len, return_tensors="pt")
     ids = enc.input_ids
     n = ids.shape[0]
 
@@ -624,12 +709,16 @@ def streamed_train_bridge_cached(model_a, model_b, tok, texts, device="cuda",
     bridge.eval()
     torch.set_grad_enabled(False)
 
-    ppl_val = math.exp(best_loss)
-    print(f"  Final loss: {best_loss:.4f}  |  PPL: {ppl_val:.1f}")
+    eval_ppl = _streamed_eval_ppl(model_a, model_b, bridge, tok, eval_texts, device, max_len, batch_size)
+    if math.isfinite(eval_ppl):
+        print(f"    Eval PPL (held-out): {eval_ppl:.1f}")
+    else:
+        print(f"    (no held-out eval texts)")
+    bridge.eval_ppl = eval_ppl
 
     del ha_gpu, hb_gpu, ids_gpu, lm_head, ha_full, hb_full, ids_full
     clean()
-    return bridge, ppl_val
+    return bridge, eval_ppl
 
 
 # ===========================================================================
@@ -639,7 +728,8 @@ def streamed_train_bridge_cached(model_a, model_b, tok, texts, device="cuda",
 def streamed_merge_diff_arch(model_a, model_b, calib_texts=None,
                               save_name="streamed_merge", device="cuda",
                               tok=None, steps=10, lr=3e-4,
-                              weight_decay=0.01, max_len=128):
+                              weight_decay=0.01, max_len=128,
+                              bridge_type="linear"):
     """Approach 4: Full pipeline -- cache, train, save, eval."""
     print("="*60)
     print("  APPROACH 4: Full Pipeline (cached + save + eval)")
@@ -673,6 +763,7 @@ def streamed_merge_diff_arch(model_a, model_b, calib_texts=None,
     bridge, ppl_val = streamed_train_bridge_cached(
         model_a, model_b, tok, calib_texts, device=device,
         steps=steps, lr=lr, weight_decay=weight_decay, max_len=max_len,
+        bridge_type=bridge_type,
     )
 
     # Save

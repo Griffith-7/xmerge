@@ -1,7 +1,7 @@
 """Final verification of all fixes."""
 import torch, math, gc, os, sys, json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-from fusellm import merge_prod, utils
+from xmerge import merge_prod, utils
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 

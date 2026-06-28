@@ -20,22 +20,36 @@ def clean():
 # ─── CKA Tests ──────────────────────────────────────────────────────────────
 
 class TestActivationSimilarity:
-    def test_identical_vectors(self):
-        x = torch.randn(6400)
+    def test_identical_hidden_states(self):
+        x = torch.randn(2, 10, 768)
         score = merge_prod.activation_similarity(x, x)
         assert abs(score - 1.0) < 1e-4
 
-    def test_random_vectors(self):
-        x = torch.randn(6400)
-        y = torch.randn(6400)
+    def test_different_hidden_states(self):
+        x = torch.randn(2, 10, 768)
+        y = torch.randn(2, 10, 768)
         score = merge_prod.activation_similarity(x, y)
-        assert -1 <= score <= 1
+        assert 0.0 <= score <= 1.0
 
     def test_zero_input(self):
-        x = torch.zeros(6400)
-        y = torch.randn(6400)
+        x = torch.zeros(2, 10, 768)
+        y = torch.randn(2, 10, 768)
         score = merge_prod.activation_similarity(x, y)
-        assert math.isfinite(score)
+        assert torch.isfinite(score) and score >= 0.0
+
+    def test_realistic_cross_model(self):
+        # Same model same input should give ~1.0
+        x = torch.randn(4, 32, 768)
+        y = x.clone()
+        score = merge_prod.activation_similarity(x, y)
+        assert abs(score - 1.0) < 1e-4
+
+    def test_random_vs_structured(self):
+        # Last layer vs first layer of same model — should be lower
+        last = torch.randn(4, 32, 768) * 0.1 + 0.5
+        first = torch.randn(4, 32, 768) * 0.1
+        score = merge_prod.activation_similarity(last, first)
+        assert 0.0 <= score <= 1.0
 
 
 # ─── Bridge Tests ───────────────────────────────────────────────────────────
