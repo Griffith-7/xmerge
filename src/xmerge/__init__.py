@@ -24,4 +24,4 @@ CLI:
   xmerge list                         — List saved merges
   xmerge clean                        — Clear GPU memory cache
 """
-from . import merge_prod, utils
+from . import merge_prod, utils, merge_stream
