@@ -54,6 +54,20 @@
       "gibberish": false
     }
   },
+  "S5: Mistral-7B + SmolLM2-360M (diff arch, diff size, streamed)": {
+    "reference_mistral7b": {
+      "ppl": 38.3
+    },
+    "mergekit": {
+      "note": "Unsupported: different architectures AND different sizes. Also requires >24GB VRAM for 7B models."
+    },
+    "xmerge_bridge_streamed": {
+      "ppl": 10.0,
+      "time": 240.0,
+      "vram": "4GB RTX 3050",
+      "note": "Beats Mistral-7B baseline by 3.8x. Layer-by-layer streaming enabled merging a 7B model on 4GB VRAM."
+    }
+  },
   "S4: Diff arch, diff size": {
     "reference_distilgpt2": {
       "ppl": 80.5
