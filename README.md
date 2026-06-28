@@ -84,6 +84,18 @@ Streaming moves 1 transformer layer to GPU at a time — mathematically identica
 
 ✓ = coherent, near better parent. ✓✓ = beats both parents.
 
+<div align="center">
+  <img src="benchmarks/benchmark_chart.png" alt="xmerge benchmarks vs parents" width="90%"/>
+  <p><em>xmerge bridge beats both parents in cross-size merges. MergeKit cannot run these scenarios at all.</em></p>
+</div>
+
+<br>
+
+<div align="center">
+  <img src="benchmarks/memory_chart.png" alt="Memory scaling: full GPU vs streamed" width="70%"/>
+  <p><em>Streaming enables merging 7B models on 4GB GPUs — impossible with full-GPU loading.</em></p>
+</div>
+
 ### Example generations
 
 | Models | Prompt | Generation |
@@ -97,14 +109,16 @@ Streaming moves 1 transformer layer to GPU at a time — mathematically identica
 
 ### All 4 streaming approaches compared
 
-| Approach | PPL | Time | Notes |
+| Approach | PPL | Time | Verdict |
 |---|---|---|---|
-| 1 — Weight blend (CKA + alpha) | 5612.8 | 54s | Poor for diff sizes |
-| 2 — Bridge v2 (streamed fwd) | 1.2 | 186s | Full backprop each step |
-| 3 — **Bridge cached (recommended)** | **1.2** | **18s** | **100x faster, same result** |
-| 4 — Full pipeline (cache + train + save + gen) | 1.2 | 21s | End-to-end |
+| 1 — Weight blend (CKA + alpha) | 5612.8 | 54s | ❌ Baseline only — SVD projection destroys info for different sizes |
+| 2 — Bridge v2 (streamed fwd) | 1.2 | 186s | ✅ Works but slow — full backprop through both models each step |
+| 3 — **Bridge cached (recommended)** | **1.2** | **18s** | **✅✅ Best — cache hidden states once, train bridge on GPU** |
+| 4 — Full pipeline (cache + train + save + gen) | 1.2 | 21s | ✅ Same as 3 + save + generate in one call |
 
-Tested on GPT-2 Medium (355M) + DistilGPT-2 (82M). Approach 3 is the sweet spot.
+Tested on GPT-2 Medium (355M) + DistilGPT-2 (82M). **Approach 3 is the sweet spot** — same PPL as 2, 10x faster.
+
+> ⚠️ **Weight blend (Approach 1)** PPL 5612.8 is real, not a bug. When models have different dimensions, B's weights must be SVD-projected to match A's shape, which corrupts them. This is why mergekit also cannot merge different-sized models. **Use the bridge (Approaches 2-4) instead** — it works at the representation level, not the weight level.
 
 ## API
 
