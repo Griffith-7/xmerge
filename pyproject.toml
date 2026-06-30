@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xmerge"
-version = "0.1.0"
+version = "0.2.0"
 description = "Merge LLMs of different architectures and sizes — representation-level merging, not weight-space interpolation"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -16,6 +16,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 urls = {Homepage = "https://github.com/Griffith-7/xmerge", Source = "https://github.com/Griffith-7/xmerge"}
@@ -26,7 +27,8 @@ dependencies = [
     "datasets>=2.0.0",
 ]
 [project.optional-dependencies]
-dev = ["pytest>=7.0.0"]
+dev = ["pytest>=7.0.0", "pytest-timeout>=2.0.0"]
+dev-all = ["pytest>=7.0.0", "pytest-timeout>=2.0.0", "ruff>=0.1.0"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -40,3 +42,15 @@ testpaths = ["tests"]
 markers = [
     "slow: marks tests as slow (GPU heavy, skip with -m 'not slow')",
 ]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+exclude = ["benchmarks", "offload"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N"]
+ignore = ["E501", "N803", "N806", "N812", "W293"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["N", "I", "E402", "F541", "E701", "E702"]

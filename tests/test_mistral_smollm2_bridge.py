@@ -2,8 +2,15 @@
 Full bridge merge: Mistral-7B (mmap streamed) + SmolLM2-360M.
 Cross-architecture bridge cached training on 4GB VRAM.
 """
-import torch, gc, time, os, math, json, copy, sys
-import torch.nn as nn, torch.nn.functional as F
+import torch
+import gc
+import time
+import os
+import math
+import copy
+import sys
+import torch.nn as nn
+import torch.nn.functional as F
 from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
 from transformers.models.mistral.modeling_mistral import (
     MistralDecoderLayer, MistralRotaryEmbedding, MistralRMSNorm

@@ -1,29 +1,46 @@
 """xmerge CLI — merge, eval, serve, and manage model merges."""
 
-import argparse, json, math, os, sys, time
-from pathlib import Path
+import argparse
+import json
+import logging
+import math
+import os
+import sys
+import time
+from typing import Any, Dict
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from . import merge_prod, utils
 
+logger = logging.getLogger("xmerge.cli")
+
 SAVE_DIR = merge_prod.SAVE_DIR
 DEVICE = merge_prod.DEVICE
-DTYPE = merge_prod.DTYPE
 
 
-def _load_json(path):
+def _setup_logging(verbose: bool = False) -> None:
+    """Configure logging for CLI."""
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+
+def _load_json(path: str) -> Dict[str, Any]:
     with open(path) as f:
         return json.load(f)
 
 
-def _save_json(path, data):
+def _save_json(path: str, data: Dict[str, Any]) -> None:
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
 
 
-def cmd_merge(args):
+def cmd_merge(args: argparse.Namespace) -> None:
     cfg = _load_json(args.config)
     merge_name = cfg.get("name", "unnamed_merge")
     method = cfg.get("method", "bridge")
@@ -35,23 +52,29 @@ def cmd_merge(args):
     lr = train_cfg.get("lr", 3e-4)
     weight_decay = train_cfg.get("weight_decay", 0.01)
     use_cached = train_cfg.get("use_cached", True)
+    bridge_type = train_cfg.get("bridge_type", "linear")
 
-    print(f"[xmerge] Loading models: {cfg['model_a']} + {cfg['model_b']}")
+    logger.info("Loading models: %s + %s", cfg["model_a"], cfg["model_b"])
     t0 = time.time()
-    ma = AutoModelForCausalLM.from_pretrained(cfg["model_a"], torch_dtype=DTYPE).to(DEVICE).eval()
-    mb = AutoModelForCausalLM.from_pretrained(cfg["model_b"], torch_dtype=DTYPE).to(DEVICE).eval()
+    try:
+        ma = AutoModelForCausalLM.from_pretrained(cfg["model_a"]).to(DEVICE).eval()
+        mb = AutoModelForCausalLM.from_pretrained(cfg["model_b"]).to(DEVICE).eval()
+    except Exception as e:
+        logger.error("Failed to load models: %s", e)
+        sys.exit(1)
+
     tok = AutoTokenizer.from_pretrained(cfg.get("tokenizer", cfg["model_a"]))
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
-    print(f"  Loaded in {time.time() - t0:.1f}s")
+    logger.info("Models loaded in %.1fs", time.time() - t0)
 
-    print(f"[xmerge] Loading calibration texts ({n_texts})...")
+    logger.info("Loading calibration texts (%d)...", n_texts)
     calib_texts = merge_prod.load_texts(n_texts)
 
     os.makedirs(SAVE_DIR, exist_ok=True)
     save_path = os.path.join(SAVE_DIR, merge_name)
 
-    metrics = {
+    metrics: Dict[str, Any] = {
         "name": merge_name,
         "method": method,
         "model_a": cfg["model_a"],
@@ -60,14 +83,16 @@ def cmd_merge(args):
     }
 
     if method == "weight_blend":
-        print(f"[xmerge] Running weight-blend merge...")
+        logger.info("Running weight-blend merge...")
         merged, _ = merge_prod.merge_same_arch(ma, mb, calib_texts, save_name=merge_name)
         enc = tok(calib_texts[:16], truncation=True, padding=True, max_length=64, return_tensors="pt")
-        ids, mask = enc.input_ids.to(DEVICE), enc.attention_mask.to(DEVICE)
+        ids = enc.input_ids.to(DEVICE)
+        mask = enc.attention_mask.to(DEVICE)
         metrics["final_ppl"] = round(merge_prod.ppl(merged, ids, mask), 1)
 
     elif method == "bridge":
-        print(f"[xmerge] {'Cached' if use_cached else 'Standard'} bridge training ({steps} steps)...")
+        logger.info("%s bridge training (%d steps, type=%s)...",
+                     "Cached" if use_cached else "Standard", steps, bridge_type)
 
         tok_b = AutoTokenizer.from_pretrained(cfg.get("tokenizer_b", cfg["model_b"]))
         if tok_b.pad_token is None:
@@ -75,21 +100,32 @@ def cmd_merge(args):
 
         token_map = None
         if cfg.get("cross_tokenizer", False):
-            print("  Building cross-tokenizer map...")
-            token_map = merge_prod.build_token_map(tok, tok_b)
+            logger.info("Building cross-tokenizer map...")
+            token_map = utils.build_token_map(tok, tok_b)
 
         trainer = merge_prod.train_bridge_cached if use_cached else merge_prod.train_bridge_v2
-        bridge = trainer(ma, mb, tok, calib_texts, token_map=token_map,
-                         steps=steps, lr=lr, weight_decay=weight_decay, max_len=max_len)
+        bridge = trainer(
+            ma, mb, tok, calib_texts,
+            token_map=token_map,
+            steps=steps, lr=lr,
+            weight_decay=weight_decay,
+            max_len=max_len,
+            bridge_type=bridge_type,
+        )
 
         os.makedirs(save_path, exist_ok=True)
         torch.save(bridge.state_dict(), os.path.join(save_path, "bridge.pt"))
         tok.save_pretrained(save_path)
         info = {
             "type": "trained_bridge",
-            "d_a": utils.hidden_dim(ma.config), "d_b": utils.hidden_dim(mb.config),
-            "model_a": cfg["model_a"], "model_b": cfg["model_b"],
-            "steps": steps, "lr": lr, "weight_decay": weight_decay,
+            "d_a": utils.hidden_dim(ma.config),
+            "d_b": utils.hidden_dim(mb.config),
+            "model_a": cfg["model_a"],
+            "model_b": cfg["model_b"],
+            "steps": steps,
+            "lr": lr,
+            "weight_decay": weight_decay,
+            "bridge_type": bridge_type,
             "has_token_map": token_map is not None,
             "use_cached": use_cached,
         }
@@ -98,68 +134,89 @@ def cmd_merge(args):
         metrics["status"] = "saved"
 
     else:
-        print(f"  Unknown method: {method}")
+        logger.error("Unknown method: %s", method)
         sys.exit(1)
 
-    # Save merge metrics
+    # Save metrics
     metrics_path = os.path.join(save_path, "metrics.json")
     _save_json(metrics_path, metrics)
-    print(f"[xmerge] Metrics saved to {metrics_path}")
-    print(f"[xmerge] Done in {time.time() - t0:.1f}s")
+    logger.info("Done in %.1fs. Results saved to %s", time.time() - t0, save_path)
 
 
-def cmd_eval(args):
+def cmd_eval(args: argparse.Namespace) -> None:
     if not os.path.exists(args.bridge_dir):
-        print(f"Bridge dir not found: {args.bridge_dir}")
+        logger.error("Bridge dir not found: %s", args.bridge_dir)
         sys.exit(1)
 
     info = _load_json(os.path.join(args.bridge_dir, "bridge_config.json"))
-    print(f"[xmerge] Loading bridge from {args.bridge_dir}")
-    print(f"  Model A: {info['model_a']}")
-    print(f"  Model B: {info['model_b']}")
+    logger.info("Loading bridge from %s", args.bridge_dir)
+    logger.info("  Model A: %s", info["model_a"])
+    logger.info("  Model B: %s", info["model_b"])
 
-    ma = AutoModelForCausalLM.from_pretrained(info["model_a"], torch_dtype=DTYPE).to(DEVICE).eval()
-    mb = AutoModelForCausalLM.from_pretrained(info["model_b"], torch_dtype=DTYPE).to(DEVICE).eval()
+    try:
+        ma = AutoModelForCausalLM.from_pretrained(info["model_a"]).to(DEVICE).eval()
+        mb = AutoModelForCausalLM.from_pretrained(info["model_b"]).to(DEVICE).eval()
+    except Exception as e:
+        logger.error("Failed to load models: %s", e)
+        sys.exit(1)
+
     tok = AutoTokenizer.from_pretrained(args.bridge_dir)
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
 
-    bridge = merge_prod.OptimalBridge(info["d_a"], info["d_b"])
-    state = torch.load(os.path.join(args.bridge_dir, "bridge.pt"), map_location=DEVICE, weights_only=True)
+    d_a = info.get("d_a", utils.hidden_dim(ma.config))
+    d_b = info.get("d_b", utils.hidden_dim(mb.config))
+    bridge_type = info.get("bridge_type", "linear")
+
+    if bridge_type == "mlp":
+        bridge = merge_prod.MLPBridge(d_a, d_b)
+    else:
+        bridge = merge_prod.OptimalBridge(d_a, d_b)
+
+    state = torch.load(
+        os.path.join(args.bridge_dir, "bridge.pt"),
+        map_location=DEVICE,
+        weights_only=True,
+    )
     bridge.load_state_dict(state)
     bridge.to(DEVICE).eval()
 
     prompts = args.prompts or merge_prod.EVAL_PROMPTS
-    print(f"\n  {'='*55}")
-    print(f"  Generating with {len(prompts)} prompts")
-    print(f"  {'='*55}")
-    token_map = None
+    logger.info("Generating with %d prompts", len(prompts))
     for prompt in prompts:
-        text = merge_prod.generate_bridge(ma, mb, bridge, tok, prompt, token_map=token_map)
-        print(f"\n  [{prompt}]")
+        text = merge_prod.generate_bridge(ma, mb, bridge, tok, prompt)
+        print(f"\n[{prompt}]")
         print(f"  -> {text}")
 
     if args.ppl:
         calib = merge_prod.load_texts(32)
         enc = tok(calib[:16], truncation=True, padding=True, max_length=64, return_tensors="pt")
-        ids, mask = enc.input_ids.to(DEVICE), enc.attention_mask.to(DEVICE)
+        ids = enc.input_ids.to(DEVICE)
+        mask = enc.attention_mask.to(DEVICE)
         pp_a = merge_prod.ppl(ma, ids, mask)
         lm_head = merge_prod._get_lm_head(ma)
         dtype = next(ma.parameters()).dtype
         with torch.no_grad():
             oa = ma(ids, attention_mask=mask, output_hidden_states=True)
             ob = mb(ids, attention_mask=mask, output_hidden_states=True)
-            ha, hb = oa.hidden_states[-1].float(), ob.hidden_states[-1].float()
+            ha = oa.hidden_states[-1].float()
+            hb = ob.hidden_states[-1].float()
             k = min(ha.shape[1], hb.shape[1])
             hf = bridge(ha[:, :k], hb[:, :k])
-            logits = lm_head(hf.to(dtype))
-            sl, ll = logits[..., :-1, :].contiguous(), ids[:, :k][..., 1:].contiguous()
-            loss = torch.nn.functional.cross_entropy(sl.view(-1, sl.size(-1)), ll.view(-1), ignore_index=-100)
-            bp = math.exp(loss.item())
-        print(f"\n  PPL: A={pp_a:.1f}  Bridge={bp:.1f}")
+            if lm_head:
+                logits = lm_head(hf.to(dtype))
+                sl = logits[..., :-1, :].contiguous()
+                ll = ids[:, :k][..., 1:].contiguous()
+                loss = torch.nn.functional.cross_entropy(
+                    sl.view(-1, sl.size(-1)), ll.view(-1), ignore_index=-100
+                )
+                bp = math.exp(loss.item())
+            else:
+                bp = float("inf")
+        logger.info("PPL: A=%.1f  Bridge=%.1f", pp_a, bp)
 
 
-def cmd_list(args):
+def cmd_list(args: argparse.Namespace) -> None:
     if not os.path.exists(SAVE_DIR):
         print("No saved merges found.")
         return
@@ -197,14 +254,22 @@ def cmd_list(args):
             print(f"{name:<30} {mtype:<20} {ppl_str:<10} {models}")
 
 
-def cmd_clean(args):
-    print(f"[xmerge] Cleaning GPU memory...")
+def cmd_clean(args: argparse.Namespace) -> None:
+    logger.info("Cleaning GPU memory...")
     merge_prod.clean()
-    print(f"  [OK]")
+    logger.info("Done.")
 
 
-def main():
-    parser = argparse.ArgumentParser(prog="xmerge", description="Merge LLMs across architectures and sizes")
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        prog="xmerge",
+        description="Merge LLMs across architectures and sizes — representation-level merging",
+    )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Enable verbose (debug) logging",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_merge = sub.add_parser("merge", help="Run a merge from config file")
@@ -215,20 +280,20 @@ def main():
     p_eval.add_argument("--prompts", "-p", nargs="*", default=None, help="Custom prompts")
     p_eval.add_argument("--ppl", action="store_true", help="Compute PPL")
 
-    p_list = sub.add_parser("list", help="List saved merges")
+    sub.add_parser("list", help="List saved merges")
 
-    p_clean = sub.add_parser("clean", help="Clear GPU memory cache")
+    sub.add_parser("clean", help="Clear GPU memory cache")
 
     args = parser.parse_args()
+    _setup_logging(args.verbose if hasattr(args, "verbose") else False)
 
-    if args.command == "merge":
-        cmd_merge(args)
-    elif args.command == "eval":
-        cmd_eval(args)
-    elif args.command == "list":
-        cmd_list(args)
-    elif args.command == "clean":
-        cmd_clean(args)
+    commands = {
+        "merge": cmd_merge,
+        "eval": cmd_eval,
+        "list": cmd_list,
+        "clean": cmd_clean,
+    }
+    commands[args.command](args)
 
 
 if __name__ == "__main__":

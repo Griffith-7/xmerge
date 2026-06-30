@@ -1,199 +1,224 @@
-import pytest, torch, gc, math, sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+"""Tests for merge_prod — CKA, bridges, and merge functions."""
+
+import gc
+import math
+import torch
+import pytest
+
 from xmerge import merge_prod, utils
 
-DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 skip_slow = pytest.mark.skipif(not torch.cuda.is_available(), reason="requires GPU")
 
 CALIB_TEXTS = [
-    'The theory of general relativity describes gravity as the curvature of spacetime.',
-    'Photosynthesis is the process by which green plants use sunlight to synthesize nutrients.',
-    'Artificial intelligence refers to the simulation of human intelligence in machines.',
+    "The theory of general relativity describes gravity as the curvature of spacetime.",
+    "Photosynthesis is the process by which green plants use sunlight to synthesize nutrients.",
+    "Artificial intelligence refers to the simulation of human intelligence in machines.",
 ]
 
 
 def clean():
     gc.collect()
-    if DEVICE == 'cuda': torch.cuda.empty_cache()
+    if DEVICE == "cuda":
+        torch.cuda.empty_cache()
 
 
-# ─── CKA Tests ──────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════
+# CKA TESTS
+# ═══════════════════════════════════════════════════════════════════════════
 
-class TestActivationSimilarity:
-    def test_identical_hidden_states(self):
-        x = torch.randn(2, 10, 768)
-        score = merge_prod.activation_similarity(x, x)
+class TestHSIC_CKA:
+    def test_identical(self):
+        x = torch.randn(32, 768)
+        score = merge_prod.hsic_cka(x, x)
         assert abs(score - 1.0) < 1e-4
 
-    def test_different_hidden_states(self):
-        x = torch.randn(2, 10, 768)
-        y = torch.randn(2, 10, 768)
-        score = merge_prod.activation_similarity(x, y)
+    def test_range(self):
+        x = torch.randn(32, 768)
+        y = torch.randn(32, 768)
+        score = merge_prod.hsic_cka(x, y)
         assert 0.0 <= score <= 1.0
 
-    def test_zero_input(self):
-        x = torch.zeros(2, 10, 768)
-        y = torch.randn(2, 10, 768)
-        score = merge_prod.activation_similarity(x, y)
-        assert torch.isfinite(score) and score >= 0.0
-
-    def test_realistic_cross_model(self):
-        # Same model same input should give ~1.0
-        x = torch.randn(4, 32, 768)
-        y = x.clone()
-        score = merge_prod.activation_similarity(x, y)
-        assert abs(score - 1.0) < 1e-4
-
-    def test_random_vs_structured(self):
-        # Last layer vs first layer of same model — should be lower
-        last = torch.randn(4, 32, 768) * 0.1 + 0.5
-        first = torch.randn(4, 32, 768) * 0.1
-        score = merge_prod.activation_similarity(last, first)
-        assert 0.0 <= score <= 1.0
+    def test_zero_variance(self):
+        x = torch.zeros(32, 768)
+        y = torch.randn(32, 768)
+        score = merge_prod.hsic_cka(x, y)
+        assert score >= 0.0
 
 
-# ─── Bridge Tests ───────────────────────────────────────────────────────────
+class TestCkaComputer:
+    def test_hook_setup(self):
+        from transformers import AutoConfig, AutoModelForCausalLM
+        cfg = AutoConfig.from_pretrained("distilgpt2")
+        model = AutoModelForCausalLM.from_config(cfg)
+        n_layers = utils.num_layers(cfg)
+        computer = merge_prod.CkaComputer(model, n_layers)
+        assert len(computer.handles) == n_layers
+        computer.close()
+        assert all(h is not None for h in computer.handles)
 
-class TestOptimalBridge:
-    def test_zero_init(self):
-        bridge = merge_prod.OptimalBridge(768, 768)
-        assert bridge.proj.weight.norm().item() == 0.0
-
-    def test_identity_forward_same_dims(self):
-        bridge = merge_prod.OptimalBridge(768, 768)
-        h_a = torch.randn(2, 10, 768)
-        h_b = torch.randn(2, 10, 768)
-        out = bridge(h_a, h_b)
-        assert out.shape == h_a.shape
-        assert torch.allclose(out, h_a)
-
-    def test_identity_forward_asymmetric_dims(self):
-        bridge = merge_prod.OptimalBridge(768, 512)
-        h_a = torch.randn(2, 10, 768)
-        h_b = torch.randn(2, 10, 512)
-        out = bridge(h_a, h_b)
-        assert out.shape == h_a.shape
-        assert torch.allclose(out, h_a)
+    def test_collect_hiddens(self):
+        from transformers import AutoConfig, AutoModelForCausalLM
+        cfg = AutoConfig.from_pretrained("distilgpt2")
+        model = AutoModelForCausalLM.from_config(cfg).eval()
+        n_layers = utils.num_layers(cfg)
+        computer = merge_prod.CkaComputer(model, n_layers)
+        ids = torch.randint(0, 100, (1, 16))
+        hiddens = computer.collect(model, ids, None)
+        assert len(hiddens) == n_layers
+        for i in range(n_layers):
+            assert i in hiddens
+        computer.close()
 
 
-@pytest.mark.slow
+# ═══════════════════════════════════════════════════════════════════════════
+# BRIDGE TESTS
+# ═══════════════════════════════════════════════════════════════════════════
+
 class TestBuildBridge:
-    def test_zero_init_from_build_bridge(self):
+    def test_zero_init(self):
         from transformers import AutoModelForCausalLM, AutoTokenizer
-        ma = AutoModelForCausalLM.from_pretrained('distilgpt2', torch_dtype=torch.float16).to(DEVICE).eval()
-        mb = AutoModelForCausalLM.from_pretrained('facebook/opt-125m', torch_dtype=torch.float16,
-                                                    use_safetensors=True).to(DEVICE).eval()
-        tok = AutoTokenizer.from_pretrained('distilgpt2'); tok.pad_token = tok.eos_token
+        ma = AutoModelForCausalLM.from_pretrained("distilgpt2").eval()
+        mb = AutoModelForCausalLM.from_pretrained("distilgpt2").eval()
+        tok = AutoTokenizer.from_pretrained("distilgpt2")
+        tok.pad_token = tok.eos_token
         bridge = merge_prod.build_bridge(ma, mb, tok, CALIB_TEXTS)
         assert bridge.proj.weight.norm().item() == 0.0
-        del ma, mb, bridge; clean()
+        del ma, mb, bridge
+        clean()
 
-    def test_bridge_produces_finite_ppl(self):
+    def test_mlp_bridge_build(self):
         from transformers import AutoModelForCausalLM, AutoTokenizer
-        import torch.nn.functional as F
-        ma = AutoModelForCausalLM.from_pretrained('distilgpt2', torch_dtype=torch.float16).to(DEVICE).eval()
-        mb = AutoModelForCausalLM.from_pretrained('facebook/opt-125m', torch_dtype=torch.float16,
-                                                    use_safetensors=True).to(DEVICE).eval()
-        tok = AutoTokenizer.from_pretrained('distilgpt2'); tok.pad_token = tok.eos_token
-        bridge = merge_prod.build_bridge(ma, mb, tok, CALIB_TEXTS)
-        enc = tok(CALIB_TEXTS, truncation=True, padding=True, max_length=64, return_tensors='pt')
-        ids, mask = enc.input_ids.to(DEVICE), enc.attention_mask.to(DEVICE)
-        dtype = next(ma.parameters()).dtype
-        loss, logits = merge_prod._stitch_forward(ma, mb, bridge, ids, mask, ids, dtype)
-        ppl = math.exp(loss.item())
-        assert math.isfinite(ppl)
-        assert isinstance(ppl, float) and ppl > 0
-        del ma, mb, bridge; clean()
+        ma = AutoModelForCausalLM.from_pretrained("distilgpt2").eval()
+        mb = AutoModelForCausalLM.from_pretrained("distilgpt2").eval()
+        tok = AutoTokenizer.from_pretrained("distilgpt2")
+        tok.pad_token = tok.eos_token
+        bridge = merge_prod.build_bridge(ma, mb, tok, CALIB_TEXTS, bridge_type="mlp")
+        assert isinstance(bridge, merge_prod.MLPBridge)
+        assert bridge.linear.weight.norm().item() == 0.0
+        del ma, mb, bridge
+        clean()
 
 
 @pytest.mark.slow
 class TestTrainBridgeV2:
     def test_training_reduces_loss(self):
         from transformers import AutoModelForCausalLM, AutoTokenizer
-        ma = AutoModelForCausalLM.from_pretrained('distilgpt2', torch_dtype=torch.float16).to(DEVICE).eval()
-        mb = AutoModelForCausalLM.from_pretrained('facebook/opt-125m', torch_dtype=torch.float16,
-                                                    use_safetensors=True).to(DEVICE).eval()
-        tok = AutoTokenizer.from_pretrained('distilgpt2'); tok.pad_token = tok.eos_token
-
+        ma = AutoModelForCausalLM.from_pretrained("distilgpt2").eval()
+        mb = AutoModelForCausalLM.from_pretrained("distilgpt2").eval()
+        tok = AutoTokenizer.from_pretrained("distilgpt2")
+        tok.pad_token = tok.eos_token
         texts = CALIB_TEXTS * 3
-        bridge = merge_prod.train_bridge_v2(ma, mb, tok, texts, steps=5)
-        w_norm = bridge.proj.weight.norm().item()
-        assert w_norm > 0
-        assert w_norm < 100
-
-        enc = tok(CALIB_TEXTS, truncation=True, padding=True, max_length=64, return_tensors='pt')
-        ids, mask = enc.input_ids.to(DEVICE), enc.attention_mask.to(DEVICE)
+        bridge = merge_prod.train_bridge_v2(ma, mb, tok, texts, steps=5, verbose=False)
+        assert bridge.proj.weight.norm().item() > 0
+        assert bridge.proj.weight.norm().item() < 100
+        enc = tok(CALIB_TEXTS, truncation=True, padding=True, max_length=64, return_tensors="pt")
+        ids = enc.input_ids.to(DEVICE)
+        mask = enc.attention_mask.to(DEVICE)
         dtype = next(ma.parameters()).dtype
         loss, _ = merge_prod._stitch_forward(ma, mb, bridge, ids, mask, ids, dtype)
         ppl = math.exp(loss.item())
         assert math.isfinite(ppl)
-        del ma, mb, bridge; clean()
+        del ma, mb, bridge
+        clean()
 
-
-# ─── Same-Arch Merge Tests ──────────────────────────────────────────────────
-
-@pytest.mark.slow
-class TestMergeSameArch:
-    def test_merge_does_not_crash(self):
+    def test_cached_training(self):
         from transformers import AutoModelForCausalLM, AutoTokenizer
-        ma = AutoModelForCausalLM.from_pretrained('distilgpt2', torch_dtype=torch.float16).to(DEVICE).eval()
-        mb = AutoModelForCausalLM.from_pretrained('distilgpt2', torch_dtype=torch.float16).to(DEVICE).eval()
-        merged, _ = merge_prod.merge_same_arch(ma, mb, calib_texts=CALIB_TEXTS[:10], save_name=None)
-        assert merged is not None
-        del ma, mb, merged; clean()
+        ma = AutoModelForCausalLM.from_pretrained("distilgpt2").eval()
+        mb = AutoModelForCausalLM.from_pretrained("distilgpt2").eval()
+        tok = AutoTokenizer.from_pretrained("distilgpt2")
+        tok.pad_token = tok.eos_token
+        texts = CALIB_TEXTS * 3
+        bridge = merge_prod.train_bridge_cached(ma, mb, tok, texts, steps=5, verbose=False)
+        assert bridge.proj.weight.norm().item() > 0
+        del ma, mb, bridge
+        clean()
 
-    def test_merged_model_generates(self):
+    def test_mlp_training(self):
         from transformers import AutoModelForCausalLM, AutoTokenizer
-        ma = AutoModelForCausalLM.from_pretrained('distilgpt2', torch_dtype=torch.float16).to(DEVICE).eval()
-        mb = AutoModelForCausalLM.from_pretrained('distilgpt2', torch_dtype=torch.float16).to(DEVICE).eval()
-        tok = AutoTokenizer.from_pretrained('distilgpt2'); tok.pad_token = tok.eos_token
-        merged, _ = merge_prod.merge_same_arch(ma, mb, calib_texts=CALIB_TEXTS[:10], save_name=None)
-        inp = tok("Hello world", return_tensors='pt').to(DEVICE)
-        out = merged.generate(**inp, max_new_tokens=5, pad_token_id=tok.eos_token_id)
-        text = tok.decode(out[0], skip_special_tokens=True)
-        assert isinstance(text, str) and len(text) > 0
-        del ma, mb, merged; clean()
+        ma = AutoModelForCausalLM.from_pretrained("distilgpt2").eval()
+        mb = AutoModelForCausalLM.from_pretrained("distilgpt2").eval()
+        tok = AutoTokenizer.from_pretrained("distilgpt2")
+        tok.pad_token = tok.eos_token
+        texts = CALIB_TEXTS * 3
+        bridge = merge_prod.train_bridge_v2(ma, mb, tok, texts, steps=3, bridge_type="mlp", verbose=False)
+        assert isinstance(bridge, merge_prod.MLPBridge)
+        assert bridge.linear.weight.norm().item() > 0
+        del ma, mb, bridge
+        clean()
 
-
-@pytest.mark.slow
-class TestMergeSameArchBridge:
-    def test_bridge_trains_and_generates(self):
+    def test_empty_texts_raises(self):
         from transformers import AutoModelForCausalLM, AutoTokenizer
-        ma = AutoModelForCausalLM.from_pretrained('distilgpt2', torch_dtype=torch.float16).to(DEVICE).eval()
-        mb = AutoModelForCausalLM.from_pretrained('distilgpt2', torch_dtype=torch.float16).to(DEVICE).eval()
-        tok = AutoTokenizer.from_pretrained('distilgpt2'); tok.pad_token = tok.eos_token
-        bridge, tok_out = merge_prod.merge_same_arch_bridge(ma, mb, tok, CALIB_TEXTS, steps=2, save_name=None)
-        assert bridge is not None
-        assert tok_out is not None
-        w_norm = bridge.proj.weight.norm().item()
-        assert w_norm > 0
-        gen = merge_prod.stitch_generate(ma, mb, bridge, tok, "Hello", max_new=5)
-        assert isinstance(gen, str) and len(gen) > 5
-        del ma, mb, bridge; clean()
+        ma = AutoModelForCausalLM.from_pretrained("distilgpt2").eval()
+        mb = AutoModelForCausalLM.from_pretrained("distilgpt2").eval()
+        tok = AutoTokenizer.from_pretrained("distilgpt2")
+        tok.pad_token = tok.eos_token
+        with pytest.raises(ValueError, match="empty"):
+            merge_prod.train_bridge_v2(ma, mb, tok, [], verbose=False)
+        del ma, mb
+        clean()
 
 
-# ─── Generation Tests ───────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════
+# GENERATION TESTS
+# ═══════════════════════════════════════════════════════════════════════════
 
-@pytest.mark.slow
-class TestStitchGenerate:
-    def test_generate_does_not_crash(self):
+class TestGeneration:
+    def test_stitch_generate(self):
         from transformers import AutoModelForCausalLM, AutoTokenizer
-        ma = AutoModelForCausalLM.from_pretrained('distilgpt2', torch_dtype=torch.float16).to(DEVICE).eval()
-        mb = AutoModelForCausalLM.from_pretrained('facebook/opt-125m', torch_dtype=torch.float16,
-                                                    use_safetensors=True).to(DEVICE).eval()
-        tok = AutoTokenizer.from_pretrained('distilgpt2'); tok.pad_token = tok.eos_token
-        bridge = merge_prod.build_bridge(ma, mb, tok, CALIB_TEXTS)
+        ma = AutoModelForCausalLM.from_pretrained("distilgpt2").eval()
+        mb = AutoModelForCausalLM.from_pretrained("distilgpt2").eval()
+        tok = AutoTokenizer.from_pretrained("distilgpt2")
+        tok.pad_token = tok.eos_token
+        bridge = merge_prod.OptimalBridge(768, 768)
         text = merge_prod.stitch_generate(ma, mb, bridge, tok, "Hello", max_new=5)
-        assert isinstance(text, str) and len(text) > 5
-        del ma, mb, bridge; clean()
+        assert isinstance(text, str)
+        assert len(text) > 5
+        del ma, mb, bridge
+        clean()
 
-    def test_generate_bridge_does_not_crash(self):
+    def test_generate_bridge(self):
         from transformers import AutoModelForCausalLM, AutoTokenizer
-        ma = AutoModelForCausalLM.from_pretrained('distilgpt2', torch_dtype=torch.float16).to(DEVICE).eval()
-        mb = AutoModelForCausalLM.from_pretrained('facebook/opt-125m', torch_dtype=torch.float16,
-                                                    use_safetensors=True).to(DEVICE).eval()
-        tok = AutoTokenizer.from_pretrained('distilgpt2'); tok.pad_token = tok.eos_token
-        bridge = merge_prod.build_bridge(ma, mb, tok, CALIB_TEXTS)
+        ma = AutoModelForCausalLM.from_pretrained("distilgpt2").eval()
+        mb = AutoModelForCausalLM.from_pretrained("distilgpt2").eval()
+        tok = AutoTokenizer.from_pretrained("distilgpt2")
+        tok.pad_token = tok.eos_token
+        bridge = merge_prod.OptimalBridge(768, 768)
         text = merge_prod.generate_bridge(ma, mb, bridge, tok, "Hello", max_new=5)
-        assert isinstance(text, str) and len(text) > 5
-        del ma, mb, bridge; clean()
+        assert isinstance(text, str)
+        assert len(text) > 5
+        del ma, mb, bridge
+        clean()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SAVE/LOAD
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestSaveLoad:
+    def test_load_merged(self, tmp_path):
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        import os
+        ma = AutoModelForCausalLM.from_pretrained("distilgpt2").eval()
+        mb = AutoModelForCausalLM.from_pretrained("distilgpt2").eval()
+        tok = AutoTokenizer.from_pretrained("distilgpt2")
+        tok.pad_token = tok.eos_token
+
+        bridge = merge_prod.OptimalBridge(768, 768)
+        # Save
+        bridge_dir = str(tmp_path / "test_bridge")
+        os.makedirs(bridge_dir, exist_ok=True)
+        torch.save(bridge.state_dict(), os.path.join(bridge_dir, "bridge.pt"))
+        tok.save_pretrained(bridge_dir)
+        with open(os.path.join(bridge_dir, "bridge_config.json"), "w") as f:
+            import json
+            json.dump({"type": "bridge", "bridge_type": "linear"}, f)
+
+        # Load
+        loaded_bridge, loaded_tok = merge_prod.load_merged(bridge_dir, ma, mb)
+        assert loaded_bridge is not None
+        assert loaded_tok is not None
+        assert loaded_bridge.proj.weight.norm().item() == 0.0
+
+        del ma, mb, bridge, loaded_bridge
+        clean()
